@@ -1,0 +1,20 @@
+# Contact Energy REST Sensor
+# Add this to your configuration.yaml or sensors.yaml
+
+rest:
+  - resource: http://127.0.0.1:8000/contracts/1351595553/summary
+    scan_interval: 900  # 15 minutes
+    sensor:
+      - name: "Contact Energy Summary"
+        unique_id: contact_energy_summary
+        value_template: "{{ value_json.today.value | default('unavailable') }}"
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        json_attributes:
+          - today
+          - yesterday
+          - this_month
+          - last_month
+          - comparisons
+          - contract_id

@@ -1,0 +1,15 @@
+[Unit]
+Description=Contact Energy API Server for Home Assistant
+After=network.target
+
+[Service]
+Type=simple
+User=pwadmin
+WorkingDirectory=/home/pwadmin/developer/contact-energy-nz-api
+ExecStart=/home/pwadmin/.local/bin/uv run python main.py
+Restart=always
+RestartSec=10
+Environment=PATH=/home/pwadmin/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,143 @@
+# Contact Energy Template Sensors
+# Add this to your configuration.yaml or template.yaml
+
+template:
+  - sensor:
+      # Today's Usage
+      - name: "Electricity Today"
+        unique_id: electricity_today
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        icon: mdi:lightning-bolt
+        state: >-
+          {% set today = state_attr('sensor.contact_energy_summary', 'today') %}
+          {{ today.value if today else 'unavailable' }}
+        availability: >-
+          {{ state_attr('sensor.contact_energy_summary', 'today') is not none }}
+
+      - name: "Electricity Today Cost"
+        unique_id: electricity_today_cost
+        unit_of_measurement: "$"
+        device_class: monetary
+        state_class: total_increasing
+        icon: mdi:currency-usd
+        state: >-
+          {% set today = state_attr('sensor.contact_energy_summary', 'today') %}
+          {{ today.dollar_value | round(2) if today else 'unavailable' }}
+        availability: >-
+          {{ state_attr('sensor.contact_energy_summary', 'today') is not none }}
+
+      # Yesterday's Usage
+      - name: "Electricity Yesterday"
+        unique_id: electricity_yesterday
+        unit_of_measurement: "kWh"
+        device_class: energy
+        icon: mdi:lightning-bolt
+        state: >-
+          {% set yesterday = state_attr('sensor.contact_energy_summary', 'yesterday') %}
+          {{ yesterday.value if yesterday else 'unavailable' }}
+        availability: >-
+          {{ state_attr('sensor.contact_energy_summary', 'yesterday') is not none }}
+
+      - name: "Electricity Yesterday Cost"
+        unique_id: electricity_yesterday_cost
+        unit_of_measurement: "$"
+        device_class: monetary
+        icon: mdi:currency-usd
+        state: >-
+          {% set yesterday = state_attr('sensor.contact_energy_summary', 'yesterday') %}
+          {{ yesterday.dollar_value | round(2) if yesterday else 'unavailable' }}
+        availability: >-
+          {{ state_attr('sensor.contact_energy_summary', 'yesterday') is not none }}
+
+      # This Month's Usage
+      - name: "Electricity This Month"
+        unique_id: electricity_this_month
+        unit_of_measurement: "kWh"
+        device_class: energy
+        icon: mdi:calendar-month
+        state: >-
+          {% set this_month = state_attr('sensor.contact_energy_summary', 'this_month') %}
+          {{ this_month.value | round(2) if this_month else 'unavailable' }}
+        availability: >-
+          {{ state_attr('sensor.contact_energy_summary', 'this_month') is not none }}
+
+      - name: "Electricity This Month Cost"
+        unique_id: electricity_this_month_cost
+        unit_of_measurement: "$"
+        device_class: monetary
+        icon: mdi:currency-usd
+        state: >-
+          {% set this_month = state_attr('sensor.contact_energy_summary', 'this_month') %}
+          {{ this_month.dollar_value | round(2) if this_month else 'unavailable' }}
+        availability: >-
+          {{ state_attr('sensor.contact_energy_summary', 'this_month') is not none }}
+
+      - name: "Electricity Daily Average"
+        unique_id: electricity_daily_average
+        unit_of_measurement: "kWh"
+        device_class: energy
+        icon: mdi:chart-line
+        state: >-
+          {% set this_month = state_attr('sensor.contact_energy_summary', 'this_month') %}
+          {{ this_month.daily_average | round(2) if this_month else 'unavailable' }}
+        availability: >-
+          {{ state_attr('sensor.contact_energy_summary', 'this_month') is not none }}
+
+      # Last Month's Usage
+      - name: "Electricity Last Month"
+        unique_id: electricity_last_month
+        unit_of_measurement: "kWh"
+        device_class: energy
+        icon: mdi:calendar-month-outline
+        state: >-
+          {% set last_month = state_attr('sensor.contact_energy_summary', 'last_month') %}
+          {{ last_month.value | round(2) if last_month else 'unavailable' }}
+        availability: >-
+          {{ state_attr('sensor.contact_energy_summary', 'last_month') is not none }}
+
+      - name: "Electricity Last Month Cost"
+        unique_id: electricity_last_month_cost
+        unit_of_measurement: "$"
+        device_class: monetary
+        icon: mdi:currency-usd
+        state: >-
+          {% set last_month = state_attr('sensor.contact_energy_summary', 'last_month') %}
+          {{ last_month.dollar_value | round(2) if last_month else 'unavailable' }}
+        availability: >-
+          {{ state_attr('sensor.contact_energy_summary', 'last_month') is not none }}
+
+      # Comparisons
+      - name: "Electricity vs Yesterday"
+        unique_id: electricity_vs_yesterday
+        unit_of_measurement: "%"
+        icon: mdi:percent
+        state: >-
+          {% set comparisons = state_attr('sensor.contact_energy_summary', 'comparisons') %}
+          {{ comparisons.vs_yesterday | round(1) if comparisons and comparisons.vs_yesterday is not none else 'unavailable' }}
+        availability: >-
+          {% set comparisons = state_attr('sensor.contact_energy_summary', 'comparisons') %}
+          {{ comparisons is not none and comparisons.vs_yesterday is not none }}
+
+      - name: "Electricity vs Last Week"
+        unique_id: electricity_vs_last_week
+        unit_of_measurement: "%"
+        icon: mdi:percent
+        state: >-
+          {% set comparisons = state_attr('sensor.contact_energy_summary', 'comparisons') %}
+          {{ comparisons.vs_same_day_last_week | round(1) if comparisons and comparisons.vs_same_day_last_week is not none else 'unavailable' }}
+        availability: >-
+          {% set comparisons = state_attr('sensor.contact_energy_summary', 'comparisons') %}
+          {{ comparisons is not none and comparisons.vs_same_day_last_week is not none }}
+
+      - name: "Electricity vs Last Month"
+        unique_id: electricity_vs_last_month
+        unit_of_measurement: "%"
+        icon: mdi:percent
+        state: >-
+          {% set comparisons = state_attr('sensor.contact_energy_summary', 'comparisons') %}
+          {{ comparisons.vs_last_month | round(1) if comparisons and comparisons.vs_last_month is not none else 'unavailable' }}
+        availability: >-
+          {% set comparisons = state_attr('sensor.contact_energy_summary', 'comparisons') %}
+          {{ comparisons is not none and comparisons.vs_last_month is not none }}
