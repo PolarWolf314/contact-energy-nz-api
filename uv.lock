@@ -39,12 +39,14 @@ source = { virtual = "." }
 dependencies = [
     { name = "contact-energy-nz" },
     { name = "fastapi" },
+    { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "contact-energy-nz", specifier = ">=0.1.20878578945" },
     { name = "fastapi", specifier = ">=0.128.0" },
+    { name = "pydantic", specifier = ">=2.12.5" },
 ]
 
 [[package]]
