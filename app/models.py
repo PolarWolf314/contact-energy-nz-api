@@ -79,6 +79,17 @@ class UsageSummary(BaseModel):
     comparisons: Comparisons = Field(
         default_factory=Comparisons, description="Usage comparisons"
     )
+    # Most recent available data (useful when today/yesterday are null due to data delay)
+    latest_day: UsageData | None = Field(
+        default=None, description="Most recent day with data available"
+    )
+    previous_day: UsageData | None = Field(
+        default=None, description="Day before the latest day with data"
+    )
+    data_as_of: str | None = Field(
+        default=None,
+        description="Date of the most recent data available (YYYY-MM-DD format)",
+    )
 
 
 class Contract(BaseModel):

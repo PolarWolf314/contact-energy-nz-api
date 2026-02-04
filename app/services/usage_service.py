@@ -164,7 +164,12 @@ class UsageService:
         return result
 
     async def get_summary(self, contract_id: str) -> UsageSummary:
-        """Get complete usage summary with comparisons."""
+        """Get complete usage summary with comparisons.
+
+        This method fetches today/yesterday data, but also finds the most recent
+        available data if today/yesterday are unavailable (due to Contact Energy's
+        typical 1-5 day data delay).
+        """
         cache_key = f"summary:{contract_id}"
         cached = self._cache.get(cache_key)
         if cached is not None:
@@ -193,12 +198,26 @@ class UsageService:
         # Get same day last week for comparison
         last_week_data = await self._get_daily_total(contract_id, last_week_same_day)
 
-        # Calculate comparisons
-        comparisons = Comparisons()
+        # Find most recent available data (for when today/yesterday are null)
+        latest_day, previous_day, data_as_of = await self._find_latest_available_data(
+            contract_id, today
+        )
 
-        if today_data and yesterday_data and yesterday_data.value > 0:
+        # Calculate comparisons - use latest available data if today is null
+        comparisons = Comparisons()
+        comparison_today = today_data or latest_day
+        comparison_yesterday = yesterday_data or previous_day
+
+        if (
+            comparison_today
+            and comparison_yesterday
+            and comparison_yesterday.value > 0
+        ):
             comparisons.vs_yesterday = round(
-                ((today_data.value - yesterday_data.value) / yesterday_data.value)
+                (
+                    (comparison_today.value - comparison_yesterday.value)
+                    / comparison_yesterday.value
+                )
                 * 100,
                 1,
             )
@@ -212,9 +231,9 @@ class UsageService:
                     ((this_avg - last_avg) / last_avg) * 100, 1
                 )
 
-        if today_data and last_week_data and last_week_data.value > 0:
+        if comparison_today and last_week_data and last_week_data.value > 0:
             comparisons.vs_same_day_last_week = round(
-                ((today_data.value - last_week_data.value) / last_week_data.value)
+                ((comparison_today.value - last_week_data.value) / last_week_data.value)
                 * 100,
                 1,
             )
@@ -226,10 +245,40 @@ class UsageService:
             this_month=this_month_data,
             last_month=last_month_data,
             comparisons=comparisons,
+            latest_day=latest_day,
+            previous_day=previous_day,
+            data_as_of=data_as_of,
         )
 
         self._cache.set(cache_key, result)
         return result
+
+    async def _find_latest_available_data(
+        self, contract_id: str, start_date: date
+    ) -> tuple[UsageData | None, UsageData | None, str | None]:
+        """Find the most recent day with available data.
+
+        Searches backwards from start_date up to 7 days to find data.
+        Returns (latest_day, previous_day, data_as_of_date_string).
+        """
+        latest_day: UsageData | None = None
+        previous_day: UsageData | None = None
+        data_as_of: str | None = None
+
+        # Search backwards up to 7 days
+        for days_back in range(0, 8):
+            check_date = start_date - timedelta(days=days_back)
+            data = await self._get_daily_total(contract_id, check_date)
+
+            if data and data.value > 0:
+                if latest_day is None:
+                    latest_day = data
+                    data_as_of = check_date.isoformat()
+                elif previous_day is None:
+                    previous_day = data
+                    break  # We have both, exit early
+
+        return latest_day, previous_day, data_as_of
 
     async def get_current_usage(
         self, contract_id: str
