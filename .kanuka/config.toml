@@ -4,9 +4,14 @@
 
 [users]
   d3097cd6-78b6-4977-a4f9-77d4dfac8df7 = "aaron@guo.nz"
+  d94a1984-6ff3-4164-98fa-d60ec5d6d2a8 = "aaron@guo.nz"
 
 [devices]
   [devices.d3097cd6-78b6-4977-a4f9-77d4dfac8df7]
     email = "aaron@guo.nz"
     name = "aarons-macbook-pro-2local"
     created_at = 2026-02-04T10:13:12.280333Z
+  [devices.d94a1984-6ff3-4164-98fa-d60ec5d6d2a8]
+    email = "aaron@guo.nz"
+    name = "pw314server"
+    created_at = 2026-02-04T10:48:38.894371622Z
