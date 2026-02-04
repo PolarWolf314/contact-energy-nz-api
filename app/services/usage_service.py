@@ -20,7 +20,14 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class UsageService:
-    """Service for fetching and calculating usage data."""
+    """Service for fetching and calculating usage data.
+    
+    This service uses a database-first approach:
+    1. Check database for cached data
+    2. If not found or stale, fetch from API
+    3. Store fetched data in database for future use
+    4. Calculate aggregates from database
+    """
 
     def __init__(self):
         """Initialize the usage service."""
@@ -37,18 +44,56 @@ class UsageService:
             return cached
 
         accounts = await self._api.get_accounts()
+        
+        # Store accounts in database
+        for account in accounts:
+            for contract in account.contracts:
+                await self._account_repo.upsert_contract(
+                    contract.contract_id, account.account_id
+                )
+        
         self._cache.set(cache_key, accounts)
         return accounts
 
     async def get_hourly_usage(
         self, contract_id: str, target_date: date
     ) -> HourlyUsageData:
-        """Get hourly usage for a specific date."""
+        """Get hourly usage for a specific date.
+        
+        Uses database-first approach:
+        1. Check if we have hourly data in the database
+        2. If not, fetch from API and store
+        """
         cache_key = f"hourly:{contract_id}:{target_date.isoformat()}"
         cached = self._cache.get(cache_key)
         if cached is not None:
             return cached
 
+        # Check database first
+        hours = await self._usage_repo.get_hourly_data_for_date(contract_id, target_date)
+        
+        if not hours:
+            # Not in database, fetch from API
+            hours = await self._fetch_hourly_from_api(contract_id, target_date)
+
+        # Calculate totals
+        total_value = sum(h.value for h in hours)
+        total_dollar = sum(h.dollar_value or 0 for h in hours) or None
+
+        result = HourlyUsageData(
+            date=datetime.combine(target_date, datetime.min.time()),
+            hours=hours,
+            total_value=total_value,
+            total_dollar_value=total_dollar,
+        )
+
+        self._cache.set(cache_key, result)
+        return result
+
+    async def _fetch_hourly_from_api(
+        self, contract_id: str, target_date: date
+    ) -> list[UsageData]:
+        """Fetch hourly data from API and store in database."""
         # Ensure we have the right contract set
         accounts = await self.get_accounts()
         account_id = await self._find_account_for_contract(contract_id, accounts)
@@ -72,44 +117,60 @@ class UsageService:
                 uncharged_value=hour_data.uncharged_value,
             )
 
-        # Calculate totals
-        total_value = sum(h.value for h in hours)
-        total_dollar = sum(h.dollar_value or 0 for h in hours) or None
-
-        result = HourlyUsageData(
-            date=datetime.combine(target_date, datetime.min.time()),
-            hours=hours,
-            total_value=total_value,
-            total_dollar_value=total_dollar,
-        )
-
-        self._cache.set(cache_key, result)
-        return result
+        return hours
 
     async def get_monthly_usage(
         self, contract_id: str, start_month: str, end_month: str
     ) -> list[MonthlyAggregate]:
         """Get monthly usage for a date range.
-
-        Args:
-            contract_id: The contract to query.
-            start_month: Start month in YYYY-MM format.
-            end_month: End month in YYYY-MM format.
+        
+        Uses database-first approach for each month.
         """
         cache_key = f"monthly:{contract_id}:{start_month}:{end_month}"
         cached = self._cache.get(cache_key)
         if cached is not None:
             return cached
 
-        # Parse month strings to dates
-        start_date = datetime.strptime(start_month, "%Y-%m").date()
-        # End date is the last day of the end month
-        end_date_parsed = datetime.strptime(end_month, "%Y-%m").date()
-        # Get first day of next month, then subtract one day
-        if end_date_parsed.month == 12:
-            next_month = end_date_parsed.replace(year=end_date_parsed.year + 1, month=1)
+        result = []
+        
+        # Parse month range
+        current = datetime.strptime(start_month, "%Y-%m").date()
+        end = datetime.strptime(end_month, "%Y-%m").date()
+        
+        while current <= end:
+            month_str = current.strftime("%Y-%m")
+            
+            # Try database first
+            aggregate = await self._usage_repo.get_monthly_aggregate_from_db(
+                contract_id, month_str
+            )
+            
+            if aggregate is None:
+                # Not in database, fetch from API
+                aggregate = await self._fetch_month_from_api(contract_id, month_str)
+            
+            if aggregate:
+                result.append(aggregate)
+            
+            # Move to next month
+            if current.month == 12:
+                current = current.replace(year=current.year + 1, month=1)
+            else:
+                current = current.replace(month=current.month + 1)
+
+        self._cache.set(cache_key, result)
+        return result
+
+    async def _fetch_month_from_api(
+        self, contract_id: str, month: str
+    ) -> MonthlyAggregate | None:
+        """Fetch daily data for a month from API and store in database."""
+        # Parse month to get date range
+        start_date = datetime.strptime(month, "%Y-%m").date()
+        if start_date.month == 12:
+            next_month = start_date.replace(year=start_date.year + 1, month=1)
         else:
-            next_month = end_date_parsed.replace(month=end_date_parsed.month + 1)
+            next_month = start_date.replace(month=start_date.month + 1)
         end_date = next_month - timedelta(days=1)
 
         # Ensure we have the right contract set
@@ -121,18 +182,15 @@ class UsageService:
         # Fetch from API
         usage_data = await self._api.get_monthly_usage(start_date, end_date)
 
-        # Store in database and build aggregates
-        months: dict[str, list[UsageData]] = {}
-        for data in usage_data:
-            month_key = data.date.strftime("%Y-%m")
-            if month_key not in months:
-                months[month_key] = []
-            months[month_key].append(data)
+        if not usage_data:
+            return None
 
+        # Store daily data in database
+        for data in usage_data:
             await self._usage_repo.upsert_usage(
                 contract_id=contract_id,
                 date=data.date,
-                interval="monthly",
+                interval="daily",
                 value=data.value,
                 unit=data.unit,
                 dollar_value=data.dollar_value,
@@ -141,34 +199,25 @@ class UsageService:
                 uncharged_value=data.uncharged_value,
             )
 
-        # Build monthly aggregates
-        result = []
-        for month_key, data_list in sorted(months.items()):
-            total_value = sum(d.value for d in data_list)
-            total_dollar = sum(d.dollar_value or 0 for d in data_list) or None
-            days = len(data_list)
-            unit = data_list[0].unit if data_list else "kWh"
+        # Calculate aggregate
+        total_value = sum(d.value for d in usage_data)
+        total_dollar = sum(d.dollar_value or 0 for d in usage_data) or None
+        days = len(usage_data)
+        unit = usage_data[0].unit if usage_data else "kWh"
 
-            result.append(
-                MonthlyAggregate(
-                    month=month_key,
-                    value=total_value,
-                    unit=unit,
-                    dollar_value=total_dollar,
-                    daily_average=total_value / days if days > 0 else 0,
-                    days_with_data=days,
-                )
-            )
-
-        self._cache.set(cache_key, result)
-        return result
+        return MonthlyAggregate(
+            month=month,
+            value=total_value,
+            unit=unit,
+            dollar_value=total_dollar,
+            daily_average=total_value / days if days > 0 else 0,
+            days_with_data=days,
+        )
 
     async def get_summary(self, contract_id: str) -> UsageSummary:
         """Get complete usage summary with comparisons.
-
-        This method fetches today/yesterday data, but also finds the most recent
-        available data if today/yesterday are unavailable (due to Contact Energy's
-        typical 1-5 day data delay).
+        
+        Uses database-first approach for all data.
         """
         cache_key = f"summary:{contract_id}"
         cached = self._cache.get(cache_key)
@@ -179,7 +228,7 @@ class UsageService:
         yesterday = today - timedelta(days=1)
         last_week_same_day = today - timedelta(days=7)
 
-        # Get today's data
+        # Get today's data (from DB or API)
         today_data = await self._get_daily_total(contract_id, today)
 
         # Get yesterday's data
@@ -257,15 +306,32 @@ class UsageService:
         self, contract_id: str, start_date: date
     ) -> tuple[UsageData | None, UsageData | None, str | None]:
         """Find the most recent day with available data.
-
-        Searches backwards from start_date up to 7 days to find data.
+        
+        First checks database, then searches backwards from start_date.
         Returns (latest_day, previous_day, data_as_of_date_string).
         """
         latest_day: UsageData | None = None
         previous_day: UsageData | None = None
         data_as_of: str | None = None
 
-        # Search backwards up to 7 days
+        # First, try to get latest from database
+        latest_date = await self._usage_repo.get_latest_data_date(contract_id, "hourly")
+        
+        if latest_date:
+            latest_day = await self._usage_repo.get_daily_total_from_db(
+                contract_id, latest_date
+            )
+            if latest_day and latest_day.value > 0:
+                data_as_of = latest_date.isoformat()
+                # Get previous day
+                prev_date = latest_date - timedelta(days=1)
+                previous_day = await self._usage_repo.get_daily_total_from_db(
+                    contract_id, prev_date
+                )
+                if previous_day:
+                    return latest_day, previous_day, data_as_of
+
+        # Fallback: Search backwards up to 7 days via API
         for days_back in range(0, 8):
             check_date = start_date - timedelta(days=days_back)
             data = await self._get_daily_total(contract_id, check_date)
@@ -295,8 +361,19 @@ class UsageService:
     async def _get_daily_total(
         self, contract_id: str, target_date: date
     ) -> UsageData | None:
-        """Get total usage for a specific day."""
+        """Get total usage for a specific day.
+        
+        Database-first approach:
+        1. Check database for aggregated hourly data
+        2. If not found, fetch from API
+        """
         try:
+            # First try database
+            data = await self._usage_repo.get_daily_total_from_db(contract_id, target_date)
+            if data:
+                return data
+
+            # Not in database, fetch via hourly API
             hourly = await self.get_hourly_usage(contract_id, target_date)
             if not hourly.hours:
                 return None
@@ -330,12 +407,20 @@ class UsageService:
     async def _get_month_aggregate(
         self, contract_id: str, month: str
     ) -> MonthlyAggregate | None:
-        """Get aggregate data for a specific month."""
+        """Get aggregate data for a specific month.
+        
+        Database-first approach.
+        """
         try:
-            months = await self.get_monthly_usage(contract_id, month, month)
-            if months:
-                return months[0]
-            return None
+            # First try database
+            aggregate = await self._usage_repo.get_monthly_aggregate_from_db(
+                contract_id, month
+            )
+            if aggregate:
+                return aggregate
+
+            # Not in database, fetch from API
+            return await self._fetch_month_from_api(contract_id, month)
         except Exception as e:
             _LOGGER.warning("Failed to get month aggregate for %s: %s", month, e)
             return None
@@ -349,6 +434,102 @@ class UsageService:
                 if contract.contract_id == contract_id:
                     return account.account_id
         return None
+
+    # =========================================================================
+    # Sync methods for background data fetching
+    # =========================================================================
+
+    async def sync_contract_data(
+        self,
+        contract_id: str,
+        days_back: int = 7,
+        include_months: int = 2,
+    ) -> dict[str, Any]:
+        """Sync data for a contract from the API.
+        
+        Fetches recent hourly data and monthly data, storing in database.
+        
+        Args:
+            contract_id: The contract to sync
+            days_back: Number of days of hourly data to fetch
+            include_months: Number of months of daily data to fetch
+            
+        Returns:
+            Dictionary with sync statistics
+        """
+        stats = {
+            "contract_id": contract_id,
+            "hourly_days_synced": 0,
+            "months_synced": 0,
+            "errors": [],
+        }
+
+        today = date.today()
+
+        # Sync hourly data for recent days
+        for days_ago in range(days_back):
+            target_date = today - timedelta(days=days_ago)
+            try:
+                # Force fetch from API by clearing cache
+                cache_key = f"hourly:{contract_id}:{target_date.isoformat()}"
+                self._cache.delete(cache_key)
+                
+                hours = await self._fetch_hourly_from_api(contract_id, target_date)
+                if hours:
+                    stats["hourly_days_synced"] += 1
+            except Exception as e:
+                stats["errors"].append(f"Hourly {target_date}: {str(e)}")
+
+        # Sync monthly data
+        for months_ago in range(include_months):
+            if months_ago == 0:
+                month_date = today
+            else:
+                # Go back months
+                month_date = today.replace(day=1)
+                for _ in range(months_ago):
+                    month_date = month_date - timedelta(days=1)
+                    month_date = month_date.replace(day=1)
+            
+            month_str = month_date.strftime("%Y-%m")
+            try:
+                # Force fetch from API by clearing cache
+                cache_key = f"monthly:{contract_id}:{month_str}:{month_str}"
+                self._cache.delete(cache_key)
+                
+                aggregate = await self._fetch_month_from_api(contract_id, month_str)
+                if aggregate:
+                    stats["months_synced"] += 1
+            except Exception as e:
+                stats["errors"].append(f"Monthly {month_str}: {str(e)}")
+
+        return stats
+
+    async def sync_all_contracts(
+        self,
+        days_back: int = 7,
+        include_months: int = 2,
+    ) -> list[dict[str, Any]]:
+        """Sync data for all known contracts."""
+        results = []
+        
+        # Get all accounts/contracts
+        accounts = await self.get_accounts()
+        
+        for account in accounts:
+            for contract in account.contracts:
+                stats = await self.sync_contract_data(
+                    contract.contract_id,
+                    days_back=days_back,
+                    include_months=include_months,
+                )
+                results.append(stats)
+        
+        return results
+
+    async def get_data_stats(self, contract_id: str) -> dict[str, Any]:
+        """Get statistics about stored data for a contract."""
+        return await self._usage_repo.get_data_stats(contract_id)
 
 
 # Global service instance

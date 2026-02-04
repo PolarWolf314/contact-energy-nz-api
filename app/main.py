@@ -12,7 +12,9 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.db.database import init_database
 from app.routes import accounts, health, usage
+from app.routes import sync as sync_routes
 from app.services.cache import clear_cache
+from app.services.sync import start_background_sync, stop_background_sync
 
 # Configure logging
 logging.basicConfig(
@@ -36,9 +38,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     clear_cache()
     _LOGGER.info("Cache cleared")
 
+    # Start background sync (every 60 minutes)
+    start_background_sync(interval_minutes=60)
+    _LOGGER.info("Background sync started")
+
     yield
 
     # Shutdown
+    stop_background_sync()
+    _LOGGER.info("Background sync stopped")
     _LOGGER.info("Shutting down Contact Energy HA Integration API")
 
 
@@ -54,6 +62,8 @@ app = FastAPI(
 app.include_router(health.router)
 app.include_router(accounts.router)
 app.include_router(usage.router)
+app.include_router(sync_routes.router)
+app.include_router(sync_routes.stats_router)
 
 
 # Exception handlers
