@@ -228,6 +228,12 @@ class UsageService:
         yesterday = today - timedelta(days=1)
         last_week_same_day = today - timedelta(days=7)
 
+        # Find most recent available data FIRST (before other fetches pollute the DB)
+        # This ensures we correctly identify the latest day with data
+        latest_day, previous_day, data_as_of = await self._find_latest_available_data(
+            contract_id, today
+        )
+
         # Get today's data (from DB or API)
         today_data = await self._get_daily_total(contract_id, today)
 
@@ -246,11 +252,6 @@ class UsageService:
 
         # Get same day last week for comparison
         last_week_data = await self._get_daily_total(contract_id, last_week_same_day)
-
-        # Find most recent available data (for when today/yesterday are null)
-        latest_day, previous_day, data_as_of = await self._find_latest_available_data(
-            contract_id, today
-        )
 
         # Calculate comparisons - use latest available data if today is null
         comparisons = Comparisons()
@@ -334,6 +335,11 @@ class UsageService:
         # Fallback: Search backwards up to 7 days via API
         for days_back in range(0, 8):
             check_date = start_date - timedelta(days=days_back)
+            
+            # Skip if this is the same date as latest_day (already found from DB)
+            if latest_day and data_as_of == check_date.isoformat():
+                continue
+                
             data = await self._get_daily_total(contract_id, check_date)
 
             if data and data.value > 0:
@@ -444,15 +450,17 @@ class UsageService:
         contract_id: str,
         days_back: int = 7,
         include_months: int = 2,
+        force: bool = False,
     ) -> dict[str, Any]:
         """Sync data for a contract from the API.
         
-        Fetches recent hourly data and monthly data, storing in database.
+        Only fetches data that is missing from the database, unless force=True.
         
         Args:
             contract_id: The contract to sync
             days_back: Number of days of hourly data to fetch
             include_months: Number of months of daily data to fetch
+            force: If True, re-fetch all data even if it exists
             
         Returns:
             Dictionary with sync statistics
@@ -460,7 +468,9 @@ class UsageService:
         stats = {
             "contract_id": contract_id,
             "hourly_days_synced": 0,
+            "hourly_days_skipped": 0,
             "months_synced": 0,
+            "months_skipped": 0,
             "errors": [],
         }
 
@@ -470,7 +480,14 @@ class UsageService:
         for days_ago in range(days_back):
             target_date = today - timedelta(days=days_ago)
             try:
-                # Force fetch from API by clearing cache
+                # Check if we already have data for this date
+                if not force and await self._usage_repo.has_data_for_date(
+                    contract_id, target_date, "hourly"
+                ):
+                    stats["hourly_days_skipped"] += 1
+                    continue
+                
+                # Clear cache and fetch from API
                 cache_key = f"hourly:{contract_id}:{target_date.isoformat()}"
                 self._cache.delete(cache_key)
                 
@@ -493,7 +510,14 @@ class UsageService:
             
             month_str = month_date.strftime("%Y-%m")
             try:
-                # Force fetch from API by clearing cache
+                # Check if we already have data for this month
+                if not force and await self._usage_repo.has_data_for_month(
+                    contract_id, month_str
+                ):
+                    stats["months_skipped"] += 1
+                    continue
+                
+                # Clear cache and fetch from API
                 cache_key = f"monthly:{contract_id}:{month_str}:{month_str}"
                 self._cache.delete(cache_key)
                 
@@ -509,6 +533,7 @@ class UsageService:
         self,
         days_back: int = 7,
         include_months: int = 2,
+        force: bool = False,
     ) -> list[dict[str, Any]]:
         """Sync data for all known contracts."""
         results = []
@@ -522,6 +547,7 @@ class UsageService:
                     contract.contract_id,
                     days_back=days_back,
                     include_months=include_months,
+                    force=force,
                 )
                 results.append(stats)
         

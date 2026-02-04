@@ -143,8 +143,44 @@ class ContactApiWrapper:
         api = await self._get_api()
         _LOGGER.debug("Fetching hourly usage for %s", date)
 
-        usage_data = await api.get_hourly_usage(date)
-        return [self._convert_usage_datum(datum) for datum in usage_data]
+        try:
+            usage_data = await api.get_hourly_usage(date)
+        except TypeError as e:
+            # Library throws TypeError when API returns unexpected data format
+            # (e.g., string instead of list of dicts - common for gas contracts)
+            _LOGGER.debug("API returned unexpected data format for %s: %s", date, e)
+            return []
+        except Exception as e:
+            _LOGGER.warning("Error fetching hourly usage for %s: %s", date, e)
+            return []
+        
+        # Handle case where API returns empty or unexpected data
+        if not usage_data:
+            return []
+        
+        # If it's a string (error message), return empty list
+        if isinstance(usage_data, str):
+            _LOGGER.warning("API returned string instead of usage data: %s", usage_data[:100])
+            return []
+        
+        # Ensure it's iterable
+        if not hasattr(usage_data, '__iter__'):
+            _LOGGER.warning("API returned non-iterable: %s", type(usage_data))
+            return []
+        
+        result = []
+        for datum in usage_data:
+            # Skip if datum is a string (sometimes API returns error strings in list)
+            if isinstance(datum, str):
+                _LOGGER.warning("Skipping string datum in usage data: %s", datum[:50] if len(datum) > 50 else datum)
+                continue
+            try:
+                result.append(self._convert_usage_datum(datum))
+            except Exception as e:
+                _LOGGER.warning("Failed to convert usage datum: %s - %s", type(datum), e)
+                continue
+        
+        return result
 
     async def get_monthly_usage(
         self, start_date: Any, end_date: Any
@@ -153,8 +189,43 @@ class ContactApiWrapper:
         api = await self._get_api()
         _LOGGER.debug("Fetching monthly usage from %s to %s", start_date, end_date)
 
-        usage_data = await api.get_usage(start_date, end_date)
-        return [self._convert_usage_datum(datum) for datum in usage_data]
+        try:
+            usage_data = await api.get_usage(start_date, end_date)
+        except TypeError as e:
+            # Library throws TypeError when API returns unexpected data format
+            _LOGGER.debug("API returned unexpected data format for monthly usage: %s", e)
+            return []
+        except Exception as e:
+            _LOGGER.warning("Error fetching monthly usage: %s", e)
+            return []
+        
+        # Handle case where API returns empty or unexpected data
+        if not usage_data:
+            return []
+        
+        # If it's a string (error message), return empty list
+        if isinstance(usage_data, str):
+            _LOGGER.warning("API returned string instead of usage data: %s", usage_data[:100])
+            return []
+        
+        # Ensure it's iterable
+        if not hasattr(usage_data, '__iter__'):
+            _LOGGER.warning("API returned non-iterable: %s", type(usage_data))
+            return []
+        
+        result = []
+        for datum in usage_data:
+            # Skip if datum is a string (sometimes API returns error strings in list)
+            if isinstance(datum, str):
+                _LOGGER.warning("Skipping string datum in usage data: %s", datum[:50] if len(datum) > 50 else datum)
+                continue
+            try:
+                result.append(self._convert_usage_datum(datum))
+            except Exception as e:
+                _LOGGER.warning("Failed to convert usage datum: %s - %s", type(datum), e)
+                continue
+        
+        return result
 
     async def get_latest_usage(self) -> UsageData | None:
         """Get the latest available usage data."""
@@ -163,10 +234,12 @@ class ContactApiWrapper:
 
         try:
             usage_data = await api.get_latest_usage()
-            if isinstance(usage_data, list) and len(usage_data) > 0:
+            if usage_data and len(usage_data) > 0:
                 return self._convert_usage_datum(usage_data[0])
-            elif hasattr(usage_data, "date"):
-                return self._convert_usage_datum(usage_data)
+            return None
+        except TypeError as e:
+            # Library throws TypeError when API returns unexpected data format
+            _LOGGER.debug("API returned unexpected data format for latest usage: %s", e)
             return None
         except Exception as e:
             _LOGGER.warning("Failed to get latest usage: %s", e)
