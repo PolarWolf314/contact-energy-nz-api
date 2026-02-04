@@ -1,8 +1,15 @@
 # Contact Energy REST Sensor
-# Add this to your configuration.yaml or sensors.yaml
+# Add this to your configuration.yaml
+#
+# Replace YOUR_API_SERVER_ADDRESS with:
+#   - 127.0.0.1 if HA and the API run on the same machine (or HA uses --network=host)
+#   - The server's IP address (e.g., 192.168.1.100) if HA uses bridge networking
+#
+# Replace YOUR_CONTRACT_ID with your Contact Energy contract ID
+# (find it by calling GET /accounts on the API)
 
 rest:
-  - resource: http://127.0.0.1:8000/contracts/1351595553/summary
+  - resource: http://YOUR_API_SERVER_ADDRESS:8000/contracts/YOUR_CONTRACT_ID/summary
     scan_interval: 900  # 15 minutes
     sensor:
       - name: "Contact Energy Summary"

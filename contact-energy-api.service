@@ -1,15 +1,30 @@
+# Contact Energy API Server - systemd service file
+#
+# Before installing, update the following to match your environment:
+#   - User: Your Linux username
+#   - WorkingDirectory: Path to the cloned repository
+#   - ExecStart: Path to uv binary and the repository
+#   - Environment PATH: Include the directory containing uv
+#
+# Installation:
+#   1. Edit this file with your settings
+#   2. sudo cp contact-energy-api.service /etc/systemd/system/
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable contact-energy-api
+#   5. sudo systemctl start contact-energy-api
+
 [Unit]
 Description=Contact Energy API Server for Home Assistant
 After=network.target
 
 [Service]
 Type=simple
-User=pwadmin
-WorkingDirectory=/home/pwadmin/developer/contact-energy-nz-api
-ExecStart=/home/pwadmin/.local/bin/uv run python main.py
+User=YOUR_USER
+WorkingDirectory=/home/YOUR_USER/path/to/contact-energy-api
+ExecStart=/home/YOUR_USER/.local/bin/uv run python main.py
 Restart=always
 RestartSec=10
-Environment=PATH=/home/pwadmin/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=/home/YOUR_USER/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 [Install]
 WantedBy=multi-user.target
