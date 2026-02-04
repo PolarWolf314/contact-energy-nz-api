@@ -1,3 +1,4 @@
 {"ts":"2026-02-04T10:13:12.811057Z","user":"aaron@guo.nz","uuid":"d3097cd6-78b6-4977-a4f9-77d4dfac8df7","op":"init","project_name":"contact-energy-ha-integration","project_uuid":"a2d62fb9-a6bc-4b7b-bffe-878f9acd8db9","device_name":"aarons-macbook-pro-2local"}
 {"ts":"2026-02-04T10:16:02.066526Z","user":"aaron@guo.nz","uuid":"d3097cd6-78b6-4977-a4f9-77d4dfac8df7","op":"encrypt","files":["/Users/aaron/Developer/current/contact-energy-ha-integration/.env.kanuka"]}
 {"ts":"2026-02-04T10:48:38.894726Z","user":"aaron@guo.nz","uuid":"d94a1984-6ff3-4164-98fa-d60ec5d6d2a8","op":"create","device_name":"pw314server"}
+{"ts":"2026-02-04T10:53:43.853640Z","user":"aaron@guo.nz","uuid":"d3097cd6-78b6-4977-a4f9-77d4dfac8df7","op":"register","target_user":"aaron@guo.nz","target_uuid":"d94a1984-6ff3-4164-98fa-d60ec5d6d2a8"}
