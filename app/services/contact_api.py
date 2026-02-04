@@ -3,7 +3,9 @@
 import logging
 from typing import Any
 
+import aiohttp
 from contact_energy_nz import ContactEnergyApi, AuthException, UsageDatum
+from contact_energy_nz.consts import API_BASE_URL, API_KEY
 
 from app.config import get_settings
 from app.db.repositories import AccountRepository
@@ -19,6 +21,7 @@ class ContactApiWrapper:
         """Initialize wrapper."""
         self._api: ContactEnergyApi | None = None
         self._account_repo = AccountRepository()
+        self._all_accounts_cache: list[Account] | None = None
 
     async def _get_api(self) -> ContactEnergyApi:
         """Get or create authenticated API instance."""
@@ -36,47 +39,94 @@ class ContactApiWrapper:
             )
         return self._api
 
-    async def get_accounts(self) -> list[Account]:
-        """Get all accounts and contracts.
-
-        Note: The contact-energy-nz library currently only exposes the first
-        account/contract. We store discovered contracts for future queries.
+    async def _fetch_all_accounts_from_api(self) -> list[Account]:
+        """Fetch ALL accounts directly from Contact Energy API.
+        
+        The contact-energy-nz library only returns the first account/contract,
+        so we need to call the API directly to get all accounts (including gas).
         """
         api = await self._get_api()
-
-        # Store the discovered contract
-        if api.account_id and api.contract_id:
-            await self._account_repo.upsert_contract(api.contract_id, api.account_id)
-
-        # Build response from what we know
-        # The library only exposes one account/contract at a time
-        accounts: dict[str, Account] = {}
-
-        if api.account_id:
-            account = Account(account_id=api.account_id, contracts=[])
-            if api.contract_id:
-                account.contracts.append(
-                    Contract(contract_id=api.contract_id, account_id=api.account_id)
+        
+        headers = {
+            "x-api-key": API_KEY,
+            "session": api.token,
+            "authorization": api.token,
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{API_BASE_URL}/accounts/v2?ba=", headers=headers
+            ) as response:
+                if response.status != 200:
+                    _LOGGER.error("Failed to fetch accounts: %s", response.status)
+                    return []
+                
+                data = await response.json()
+                accounts_summary = data.get("accountsSummary", [])
+                
+                accounts: list[Account] = []
+                for account_data in accounts_summary:
+                    account_id = account_data.get("id", "")
+                    if not account_id:
+                        continue
+                    
+                    contracts: list[Contract] = []
+                    for contract_data in account_data.get("contracts", []):
+                        contract_id = contract_data.get("contractId", "")
+                        if contract_id:
+                            contracts.append(Contract(
+                                contract_id=contract_id,
+                                account_id=account_id
+                            ))
+                            # Store in database for future reference
+                            await self._account_repo.upsert_contract(
+                                contract_id, account_id
+                            )
+                    
+                    accounts.append(Account(
+                        account_id=account_id,
+                        contracts=contracts
+                    ))
+                
+                _LOGGER.info(
+                    "Discovered %d accounts with %d total contracts",
+                    len(accounts),
+                    sum(len(a.contracts) for a in accounts)
                 )
-            accounts[api.account_id] = account
+                return accounts
 
-        # Also include any previously stored contracts
+    async def get_accounts(self) -> list[Account]:
+        """Get all accounts and contracts.
+        
+        Fetches ALL accounts from Contact Energy API, including gas accounts.
+        """
+        # Fetch fresh from API (could add caching here if needed)
+        accounts = await self._fetch_all_accounts_from_api()
+        
+        if accounts:
+            self._all_accounts_cache = accounts
+            return accounts
+        
+        # Fallback to cached/stored data if API call fails
+        if self._all_accounts_cache:
+            return self._all_accounts_cache
+        
+        # Last resort: build from database
         stored_contracts = await self._account_repo.get_all_contracts()
+        accounts_dict: dict[str, Account] = {}
+        
         for contract_data in stored_contracts:
             account_id = contract_data["account_id"]
             contract_id = contract_data["contract_id"]
 
-            if account_id not in accounts:
-                accounts[account_id] = Account(account_id=account_id, contracts=[])
+            if account_id not in accounts_dict:
+                accounts_dict[account_id] = Account(account_id=account_id, contracts=[])
 
-            # Check if contract already in list
-            existing_ids = [c.contract_id for c in accounts[account_id].contracts]
-            if contract_id not in existing_ids:
-                accounts[account_id].contracts.append(
-                    Contract(contract_id=contract_id, account_id=account_id)
-                )
+            accounts_dict[account_id].contracts.append(
+                Contract(contract_id=contract_id, account_id=account_id)
+            )
 
-        return list(accounts.values())
+        return list(accounts_dict.values())
 
     async def set_contract(self, contract_id: str, account_id: str) -> None:
         """Set the active contract for API queries.
