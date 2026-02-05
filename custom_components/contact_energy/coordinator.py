@@ -214,3 +214,44 @@ class ContactEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except aiohttp.ClientError as err:
             _LOGGER.warning("Error fetching stats for %s: %s", contract_id, err)
             return {}
+
+    async def async_get_monthly_data(
+        self,
+        contract_id: str,
+        start_month: str,
+        end_month: str,
+    ) -> list[dict[str, Any]]:
+        """Fetch monthly usage data for a contract (used for gas statistics).
+        
+        Args:
+            contract_id: The contract ID to fetch data for
+            start_month: Start month in YYYY-MM format
+            end_month: End month in YYYY-MM format
+            
+        Returns:
+            List of monthly usage records
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.api_url}/contracts/{contract_id}/usage/monthly",
+                    params={"start": start_month, "end": end_month},
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data.get("months", [])
+                    else:
+                        _LOGGER.warning(
+                            "Failed to fetch monthly data for %s: %s",
+                            contract_id,
+                            response.status,
+                        )
+                        return []
+        except aiohttp.ClientError as err:
+            _LOGGER.warning(
+                "Error fetching monthly data for %s: %s",
+                contract_id,
+                err,
+            )
+            return []

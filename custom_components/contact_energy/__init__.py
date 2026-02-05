@@ -123,6 +123,22 @@ async def _async_import_historical_statistics(
                 continue
             
             hourly_stats = stats.get("hourly", {})
+            daily_stats = stats.get("daily", {})
+            
+            # Check if this is a gas contract (no hourly data, but has daily data)
+            hourly_count = hourly_stats.get("count", 0)
+            daily_count = daily_stats.get("count", 0)
+            
+            if hourly_count == 0 and daily_count > 0:
+                # This is a gas contract - use monthly data
+                _LOGGER.info(
+                    "Contract %s appears to be gas (no hourly data, %d daily records)",
+                    contract_id,
+                    daily_count,
+                )
+                await _async_import_gas_statistics(hass, coordinator, contract_id, daily_stats)
+                continue
+            
             oldest_date = hourly_stats.get("oldest")
             newest_date = hourly_stats.get("newest")
             
@@ -135,7 +151,7 @@ async def _async_import_historical_statistics(
             newest = datetime.fromisoformat(newest_date.split("T")[0])
             
             _LOGGER.info(
-                "Importing statistics for contract %s from %s to %s",
+                "Importing electricity statistics for contract %s from %s to %s",
                 contract_id,
                 oldest.date(),
                 newest.date(),
@@ -160,7 +176,7 @@ async def _async_import_historical_statistics(
             )
             
             _LOGGER.info(
-                "Imported %d data points for contract %s",
+                "Imported %d electricity data points for contract %s",
                 len(historical_data),
                 contract_id,
             )
@@ -171,6 +187,139 @@ async def _async_import_historical_statistics(
                 contract_id,
                 err,
             )
+
+
+async def _async_import_gas_statistics(
+    hass: HomeAssistant,
+    coordinator: ContactEnergyCoordinator,
+    contract_id: str,
+    daily_stats: dict[str, Any],
+) -> None:
+    """Import gas usage as monthly statistics.
+    
+    Gas data from Contact Energy is only available as daily totals (or monthly aggregates).
+    Since gas billing is monthly, we import monthly data points into HA statistics.
+    Each statistic entry represents the total gas usage for that month.
+    """
+    oldest_date = daily_stats.get("oldest")
+    newest_date = daily_stats.get("newest")
+    
+    if not oldest_date or not newest_date:
+        _LOGGER.warning("No date range for gas contract %s", contract_id)
+        return
+    
+    # Parse the date range
+    oldest = datetime.fromisoformat(oldest_date.split("T")[0])
+    newest = datetime.fromisoformat(newest_date.split("T")[0])
+    
+    # Convert to YYYY-MM format for monthly API
+    start_month = oldest.strftime("%Y-%m")
+    end_month = newest.strftime("%Y-%m")
+    
+    _LOGGER.info(
+        "Importing gas statistics for contract %s from %s to %s",
+        contract_id,
+        start_month,
+        end_month,
+    )
+    
+    # Fetch monthly data
+    monthly_data = await coordinator.async_get_monthly_data(
+        contract_id,
+        start_month,
+        end_month,
+    )
+    
+    if not monthly_data:
+        _LOGGER.warning("No monthly gas data for contract %s", contract_id)
+        return
+    
+    # Create gas statistics
+    await _async_insert_gas_statistics(
+        hass,
+        contract_id,
+        monthly_data,
+    )
+    
+    _LOGGER.info(
+        "Imported %d monthly gas data points for contract %s",
+        len(monthly_data),
+        contract_id,
+    )
+
+
+async def _async_insert_gas_statistics(
+    hass: HomeAssistant,
+    contract_id: str,
+    monthly_data: list[dict[str, Any]],
+) -> None:
+    """Insert monthly gas data as external statistics.
+    
+    Creates statistics entries for gas usage. Each entry represents
+    the total usage for that month, timestamped at the 1st of the month.
+    """
+    if not monthly_data:
+        return
+    
+    statistic_id = f"{DOMAIN}:gas_{contract_id}"
+    
+    # Create metadata for the statistic
+    metadata = StatisticMetaData(
+        has_mean=False,
+        has_sum=True,
+        name=f"Contact Energy Gas {contract_id}",
+        source=DOMAIN,
+        statistic_id=statistic_id,
+        unit_of_measurement="kWh",  # Gas is reported in kWh (thermal equivalent)
+    )
+    
+    # Build statistics entries
+    statistics: list[StatisticData] = []
+    cumulative_sum = 0.0
+    
+    # Sort by month
+    sorted_data = sorted(monthly_data, key=lambda x: x.get("month", ""))
+    
+    for record in sorted_data:
+        month_str = record.get("month")
+        if not month_str:
+            continue
+        
+        try:
+            # Parse the month (YYYY-MM format) and set to 1st of month at midnight UTC
+            year, month = map(int, month_str.split("-"))
+            dt = datetime(year, month, 1, 0, 0, 0, tzinfo=timezone.utc)
+            
+            value = record.get("value", 0) or 0
+            cumulative_sum += value
+            
+            # Create statistic entry
+            stat = StatisticData(
+                start=dt,
+                state=value,
+                sum=cumulative_sum,
+            )
+            statistics.append(stat)
+            
+        except (ValueError, TypeError) as err:
+            _LOGGER.warning("Error parsing month %s: %s", month_str, err)
+            continue
+    
+    if not statistics:
+        _LOGGER.warning("No valid gas statistics to insert for %s", contract_id)
+        return
+    
+    # Insert the statistics
+    try:
+        async_add_external_statistics(hass, metadata, statistics)
+        _LOGGER.info(
+            "Inserted %d gas statistics for %s (cumulative: %.2f kWh)",
+            len(statistics),
+            statistic_id,
+            cumulative_sum,
+        )
+    except Exception as err:
+        _LOGGER.error("Error inserting gas statistics: %s", err)
 
 
 async def _async_insert_statistics(

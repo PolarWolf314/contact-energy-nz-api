@@ -354,21 +354,36 @@ The integration provides these services:
 
 ### Energy Dashboard Setup
 
-**Important:** For the Energy Dashboard, use the **external statistic** (not the sensor). The integration automatically imports historical hourly data as long-term statistics.
+**Important:** For the Energy Dashboard, use the **external statistic** (not the sensor). The integration automatically imports historical data as long-term statistics.
+
+#### Electricity (Hourly Data)
 
 1. Go to **Settings** > **Dashboards** > **Energy**
 2. Under "Electricity grid", click **Add consumption**
 3. Look for `contact_energy:energy_XXXXX` in the list (**NOT** `sensor.contact_energy_XXXXX_latest_day_energy`)
 4. Select it and save
 
-**Why use the statistic instead of the sensor?**
+#### Gas (Monthly Data)
+
+Gas contracts from Contact Energy provide monthly data only (not hourly like electricity). The integration automatically detects gas contracts and imports monthly statistics.
+
+1. Go to **Settings** > **Dashboards** > **Energy**
+2. Under "Gas consumption", click **Add gas source**
+3. Look for `contact_energy:gas_XXXXX` in the list
+4. Select it and save
+
+**Note:** Gas data appears as monthly data points in the Energy Dashboard. Since Contact Energy reports gas usage in kWh (thermal equivalent), the statistics use kWh as the unit. Each data point represents the total gas usage for that month.
+
+#### Why use the statistic instead of the sensor?
 
 | Entity | Purpose | Energy Dashboard |
 |--------|---------|------------------|
-| `contact_energy:energy_XXXXX` | External statistic with hourly historical data | **Use this one** |
+| `contact_energy:energy_XXXXX` | External statistic with hourly electricity data | **Use this for electricity** |
+| `contact_energy:gas_XXXXX` | External statistic with monthly gas data | **Use this for gas** |
 | `sensor.xxx_latest_day_energy` | Shows current day's total usage | For display only |
+| `sensor.xxx_gas_this_month` | Shows current month's gas usage | For display only |
 
-The sensors are useful for dashboards and automations (e.g., "Today's usage: 15 kWh"), but the Energy Dashboard requires the external statistic which contains properly formatted hourly historical data.
+The sensors are useful for dashboards and automations (e.g., "Today's usage: 15 kWh"), but the Energy Dashboard requires the external statistic which contains properly formatted historical data.
 
 Historical data is automatically imported on first setup and when you call the `contact_energy.import_statistics` service.
 
