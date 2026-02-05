@@ -24,30 +24,46 @@ _LOGGER = logging.getLogger(__name__)
 
 
 # Sensor descriptions for electricity
+# Note: Contact Energy data is typically 3-4 days delayed, so we use "Latest Day"
+# instead of "Today" to accurately reflect the data's actual date.
 ELECTRICITY_SENSORS: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
-        key="today_energy",
-        name="Today Energy",
+        key="latest_day_energy",
+        name="Latest Day Energy",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         icon="mdi:flash",
     ),
     SensorEntityDescription(
-        key="today_cost",
-        name="Today Cost",
+        key="latest_day_cost",
+        name="Latest Day Cost",
         native_unit_of_measurement="NZD",
         device_class=SensorDeviceClass.MONETARY,
         state_class=SensorStateClass.TOTAL,
         icon="mdi:currency-usd",
     ),
     SensorEntityDescription(
-        key="yesterday_energy",
-        name="Yesterday Energy",
+        key="previous_day_energy",
+        name="Previous Day Energy",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:flash",
+    ),
+    SensorEntityDescription(
+        key="previous_day_cost",
+        name="Previous Day Cost",
+        native_unit_of_measurement="NZD",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.TOTAL,
+        icon="mdi:currency-usd",
+    ),
+    SensorEntityDescription(
+        key="data_as_of",
+        name="Data As Of",
+        device_class=SensorDeviceClass.DATE,
+        icon="mdi:calendar-clock",
     ),
     SensorEntityDescription(
         key="this_month_energy",
@@ -74,8 +90,8 @@ ELECTRICITY_SENSORS: tuple[SensorEntityDescription, ...] = (
         icon="mdi:chart-line",
     ),
     SensorEntityDescription(
-        key="vs_yesterday",
-        name="vs Yesterday",
+        key="vs_previous_day",
+        name="vs Previous Day",
         native_unit_of_measurement="%",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:percent",
@@ -132,10 +148,10 @@ async def async_setup_entry(
         # Determine if this is electricity or gas based on data
         contract_data = coordinator.data.get("contracts", {}).get(contract_id, {})
         
-        # Check if this contract has hourly data (electricity) or only monthly (gas)
-        has_hourly = contract_data.get("today") is not None
+        # Check if this contract has daily data (electricity has latest_day) or only monthly (gas)
+        has_daily_data = contract_data.get("latest_day") is not None
         
-        if has_hourly:
+        if has_daily_data:
             # Electricity contract - add all electricity sensors
             for description in ELECTRICITY_SENSORS:
                 entities.append(
@@ -206,17 +222,24 @@ class ContactEnergySensor(CoordinatorEntity[ContactEnergyCoordinator], SensorEnt
         key = self.entity_description.key
         
         # Map sensor keys to API response fields
-        if key == "today_energy":
-            today = contract_data.get("today") or contract_data.get("latest_day")
-            return today.get("value") if today else None
+        if key == "latest_day_energy":
+            latest = contract_data.get("latest_day")
+            return latest.get("value") if latest else None
         
-        elif key == "today_cost":
-            today = contract_data.get("today") or contract_data.get("latest_day")
-            return today.get("dollar_value") if today else None
+        elif key == "latest_day_cost":
+            latest = contract_data.get("latest_day")
+            return latest.get("dollar_value") if latest else None
         
-        elif key == "yesterday_energy":
-            yesterday = contract_data.get("yesterday") or contract_data.get("previous_day")
-            return yesterday.get("value") if yesterday else None
+        elif key == "previous_day_energy":
+            previous = contract_data.get("previous_day")
+            return previous.get("value") if previous else None
+        
+        elif key == "previous_day_cost":
+            previous = contract_data.get("previous_day")
+            return previous.get("dollar_value") if previous else None
+        
+        elif key == "data_as_of":
+            return contract_data.get("data_as_of")
         
         elif key == "this_month_energy":
             this_month = contract_data.get("this_month")
@@ -230,7 +253,7 @@ class ContactEnergySensor(CoordinatorEntity[ContactEnergyCoordinator], SensorEnt
             this_month = contract_data.get("this_month")
             return this_month.get("daily_average") if this_month else None
         
-        elif key == "vs_yesterday":
+        elif key == "vs_previous_day":
             comparisons = contract_data.get("comparisons", {})
             return comparisons.get("vs_yesterday")
         

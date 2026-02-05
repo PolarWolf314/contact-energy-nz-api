@@ -117,11 +117,14 @@ GET /contracts/{contract_id}/summary
 ```
 
 Returns a complete summary including:
-- Today's usage
-- Yesterday's usage
+- Latest day's usage (typically 3-4 days behind real-time)
+- Previous day's usage
 - This month's aggregate
 - Last month's aggregate
 - Comparisons (percentage changes)
+- `data_as_of` field showing the date of the most recent data
+
+**Note:** Contact Energy data is typically delayed by 3-4 days. The API provides `latest_day` and `previous_day` fields with actual dates rather than assuming "today" data is available.
 
 ### Sync Endpoints
 
@@ -252,9 +255,36 @@ There are two ways to integrate with Home Assistant:
 1. **Custom Component (Recommended)** - HACS-compatible native integration with automatic statistics import
 2. **REST Sensors** - Manual configuration using Home Assistant's built-in REST platform
 
+### Architecture Overview
+
+This integration uses a **two-component architecture**:
+
+```
+┌─────────────────────┐      ┌─────────────────────┐      ┌─────────────────────┐
+│   Contact Energy    │      │   FastAPI Server    │      │   Home Assistant    │
+│        API          │◄────►│   (this project)    │◄────►│   Custom Component  │
+│                     │      │   Port 8000         │      │   (HACS)            │
+└─────────────────────┘      └─────────────────────┘      └─────────────────────┘
+```
+
+**Why two components?**
+
+The Contact Energy API requires complex browser-like authentication (cookies, tokens, redirects). Rather than embedding this complexity into a Home Assistant integration, the FastAPI server handles the auth and data storage, while the HA component consumes clean REST endpoints.
+
+**This means you need:**
+1. The **FastAPI server running** (via systemd, Docker, or manually) - handles Contact Energy auth and data sync
+2. The **HACS component installed** in Home Assistant - connects to YOUR server, not Contact Energy directly
+
+**Deployment options:**
+- Run the server on the **same machine** as Home Assistant
+- Run the server on a **separate machine** on your network
+- The server URL is configurable during HACS component setup
+
 ---
 
 ## Option 1: HACS Custom Component (Recommended)
+
+**Prerequisites:** The FastAPI server must be running and accessible from Home Assistant. Complete the [Production Deployment](#production-deployment-ubuntulinux) section first.
 
 The custom component provides the best experience with:
 - Native Home Assistant integration with UI-based setup
@@ -292,16 +322,18 @@ The integration creates these sensors for each contract:
 **Electricity Contracts:**
 | Sensor | Description |
 |--------|-------------|
-| `sensor.contact_energy_XXXXX_today` | Today's usage in kWh |
-| `sensor.contact_energy_XXXXX_today_cost` | Today's cost in $ |
-| `sensor.contact_energy_XXXXX_yesterday` | Yesterday's usage in kWh |
-| `sensor.contact_energy_XXXXX_yesterday_cost` | Yesterday's cost in $ |
-| `sensor.contact_energy_XXXXX_this_month` | This month's total in kWh |
+| `sensor.contact_energy_XXXXX_latest_day_energy` | Latest available day's usage in kWh |
+| `sensor.contact_energy_XXXXX_latest_day_cost` | Latest available day's cost in $ |
+| `sensor.contact_energy_XXXXX_previous_day_energy` | Previous day's usage in kWh |
+| `sensor.contact_energy_XXXXX_previous_day_cost` | Previous day's cost in $ |
+| `sensor.contact_energy_XXXXX_data_as_of` | Date of the most recent data |
+| `sensor.contact_energy_XXXXX_this_month_energy` | This month's total in kWh |
 | `sensor.contact_energy_XXXXX_this_month_cost` | This month's cost in $ |
-| `sensor.contact_energy_XXXXX_last_month` | Last month's total in kWh |
-| `sensor.contact_energy_XXXXX_last_month_cost` | Last month's cost in $ |
-| `sensor.contact_energy_XXXXX_vs_yesterday` | % change vs yesterday |
+| `sensor.contact_energy_XXXXX_daily_average` | Daily average this month in kWh |
+| `sensor.contact_energy_XXXXX_vs_previous_day` | % change vs previous day |
 | `sensor.contact_energy_XXXXX_vs_last_month` | % change vs last month |
+
+**Note:** Contact Energy data is typically 3-4 days delayed. The "Latest Day" sensor shows the most recent day with data, and the "Data As Of" sensor shows the actual date.
 
 **Gas Contracts:**
 | Sensor | Description |
@@ -323,7 +355,7 @@ The sensors are automatically configured with the correct `state_class` and `dev
 
 1. Go to **Settings** > **Dashboards** > **Energy**
 2. Under "Electricity grid", click **Add consumption**
-3. Select `sensor.contact_energy_XXXXX_today`
+3. Select `sensor.contact_energy_XXXXX_latest_day_energy`
 
 Historical data is automatically imported into long-term statistics, so your Energy Dashboard will show historical data immediately.
 
@@ -383,22 +415,25 @@ rest:
     sensor:
       - name: "Contact Energy Summary"
         unique_id: contact_energy_summary
-        value_template: "{{ value_json.today.value | default('unavailable') }}"
+        value_template: "{{ value_json.latest_day.value | default('unavailable') }}"
         unit_of_measurement: "kWh"
         device_class: energy
         state_class: total_increasing
         json_attributes:
-          - today
-          - yesterday
+          - latest_day
+          - previous_day
           - this_month
           - last_month
           - comparisons
+          - data_as_of
           - contract_id
 ```
 
 Replace:
 - `YOUR_API_SERVER` with `127.0.0.1` or your server's IP
 - `YOUR_CONTRACT_ID` with your contract ID from Step 1
+
+**Note:** Contact Energy data is typically 3-4 days delayed. The `latest_day` and `previous_day` attributes contain the actual dates of the data.
 
 ### Step 5: Add Template Sensors
 
@@ -407,53 +442,62 @@ Add the following to your `configuration.yaml` (or create a separate `template.y
 ```yaml
 template:
   - sensor:
-      # Today's Usage
-      - name: "Electricity Today"
-        unique_id: electricity_today
+      # Data freshness indicator
+      - name: "Electricity Data As Of"
+        unique_id: electricity_data_as_of
+        icon: mdi:calendar-clock
+        state: >-
+          {{ state_attr('sensor.contact_energy_summary', 'data_as_of') | default('unavailable') }}
+        availability: >-
+          {{ state_attr('sensor.contact_energy_summary', 'data_as_of') is not none }}
+
+      # Latest Day's Usage (most recent data available)
+      - name: "Electricity Latest Day"
+        unique_id: electricity_latest_day
         unit_of_measurement: "kWh"
         device_class: energy
         state_class: total_increasing
         icon: mdi:lightning-bolt
         state: >-
-          {% set today = state_attr('sensor.contact_energy_summary', 'today') %}
-          {{ today.value if today else 'unavailable' }}
+          {% set latest = state_attr('sensor.contact_energy_summary', 'latest_day') %}
+          {{ latest.value if latest else 'unavailable' }}
         availability: >-
-          {{ state_attr('sensor.contact_energy_summary', 'today') is not none }}
+          {{ state_attr('sensor.contact_energy_summary', 'latest_day') is not none }}
 
-      - name: "Electricity Today Cost"
-        unique_id: electricity_today_cost
+      - name: "Electricity Latest Day Cost"
+        unique_id: electricity_latest_day_cost
         unit_of_measurement: "$"
         device_class: monetary
         state_class: total_increasing
         icon: mdi:currency-usd
         state: >-
-          {% set today = state_attr('sensor.contact_energy_summary', 'today') %}
-          {{ today.dollar_value | round(2) if today else 'unavailable' }}
+          {% set latest = state_attr('sensor.contact_energy_summary', 'latest_day') %}
+          {{ latest.dollar_value | round(2) if latest else 'unavailable' }}
         availability: >-
-          {{ state_attr('sensor.contact_energy_summary', 'today') is not none }}
+          {{ state_attr('sensor.contact_energy_summary', 'latest_day') is not none }}
 
-      # Yesterday's Usage
-      - name: "Electricity Yesterday"
-        unique_id: electricity_yesterday
+      # Previous Day's Usage
+      - name: "Electricity Previous Day"
+        unique_id: electricity_previous_day
         unit_of_measurement: "kWh"
         device_class: energy
         icon: mdi:lightning-bolt
         state: >-
-          {% set yesterday = state_attr('sensor.contact_energy_summary', 'yesterday') %}
-          {{ yesterday.value if yesterday else 'unavailable' }}
+          {% set previous = state_attr('sensor.contact_energy_summary', 'previous_day') %}
+          {{ previous.value if previous else 'unavailable' }}
         availability: >-
-          {{ state_attr('sensor.contact_energy_summary', 'yesterday') is not none }}
+          {{ state_attr('sensor.contact_energy_summary', 'previous_day') is not none }}
 
-      - name: "Electricity Yesterday Cost"
-        unique_id: electricity_yesterday_cost
+      - name: "Electricity Previous Day Cost"
+        unique_id: electricity_previous_day_cost
         unit_of_measurement: "$"
         device_class: monetary
         icon: mdi:currency-usd
         state: >-
-          {% set yesterday = state_attr('sensor.contact_energy_summary', 'yesterday') %}
-          {{ yesterday.dollar_value | round(2) if yesterday else 'unavailable' }}
+          {% set previous = state_attr('sensor.contact_energy_summary', 'previous_day') %}
+          {{ previous.dollar_value | round(2) if previous else 'unavailable' }}
         availability: >-
-          {{ state_attr('sensor.contact_energy_summary', 'yesterday') is not none }}
+          {{ state_attr('sensor.contact_energy_summary', 'previous_day') is not none }}
 
       # This Month's Usage
       - name: "Electricity This Month"
@@ -513,8 +557,8 @@ template:
           {{ state_attr('sensor.contact_energy_summary', 'last_month') is not none }}
 
       # Comparisons
-      - name: "Electricity vs Yesterday"
-        unique_id: electricity_vs_yesterday
+      - name: "Electricity vs Previous Day"
+        unique_id: electricity_vs_previous_day
         unit_of_measurement: "%"
         icon: mdi:percent
         state: >-
@@ -579,25 +623,28 @@ Or from the HA web interface:
 
 ---
 
-## Available Sensors
+## Available Sensors (REST Configuration)
 
 After configuration, you'll have these sensors:
 
 | Sensor | Description |
 |--------|-------------|
 | `sensor.contact_energy_summary` | Raw API data with all attributes |
-| `sensor.electricity_today` | Today's usage in kWh |
-| `sensor.electricity_today_cost` | Today's cost in $ |
-| `sensor.electricity_yesterday` | Yesterday's usage in kWh |
-| `sensor.electricity_yesterday_cost` | Yesterday's cost in $ |
+| `sensor.electricity_data_as_of` | Date of the most recent data |
+| `sensor.electricity_latest_day` | Latest day's usage in kWh |
+| `sensor.electricity_latest_day_cost` | Latest day's cost in $ |
+| `sensor.electricity_previous_day` | Previous day's usage in kWh |
+| `sensor.electricity_previous_day_cost` | Previous day's cost in $ |
 | `sensor.electricity_this_month` | This month's total in kWh |
 | `sensor.electricity_this_month_cost` | This month's cost in $ |
 | `sensor.electricity_daily_average` | Daily average this month in kWh |
 | `sensor.electricity_last_month` | Last month's total in kWh |
 | `sensor.electricity_last_month_cost` | Last month's cost in $ |
-| `sensor.electricity_vs_yesterday` | % change vs yesterday |
+| `sensor.electricity_vs_previous_day` | % change vs previous day |
 | `sensor.electricity_vs_last_week` | % change vs same day last week |
 | `sensor.electricity_vs_last_month` | % change vs last month |
+
+**Note:** Contact Energy data is typically 3-4 days delayed. Check the `electricity_data_as_of` sensor to see the actual date of the latest data.
 
 ---
 
