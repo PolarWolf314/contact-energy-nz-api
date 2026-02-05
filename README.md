@@ -1,14 +1,17 @@
 # Contact Energy Home Assistant Integration
 
-A FastAPI server that proxies Contact Energy usage data for Home Assistant integration.
+A FastAPI server that proxies Contact Energy usage data for Home Assistant integration, with an optional HACS-compatible custom component for deeper integration.
 
 ## Features
 
-- Fetches electricity usage data from Contact Energy NZ
+- Fetches electricity and gas usage data from Contact Energy NZ
 - Exposes REST API endpoints suitable for Home Assistant REST sensors
+- **HACS-compatible custom component** for native Home Assistant integration
 - Caches responses (15-minute TTL) to reduce API calls
 - Stores historical data in SQLite for comparisons
 - Provides usage comparisons (vs yesterday, vs last month, vs same day last week)
+- **Adaptive backfill** - fetches ALL available historical data from Contact Energy
+- **Historical statistics import** - imports data into HA's long-term statistics for Energy Dashboard
 
 ## Requirements
 
@@ -53,6 +56,16 @@ Optional settings (with defaults):
 ```env
 DATABASE_PATH=usage.db
 CACHE_TTL=900
+
+# Backfill settings
+BACKFILL_MAX_DAYS=0          # 0 = adaptive (unlimited), or specify max days
+BACKFILL_EMPTY_DAYS_THRESHOLD=3  # Stop after this many consecutive empty days
+BACKFILL_API_DELAY=1.0       # Seconds between API calls (rate limiting)
+
+# Sync settings
+REGULAR_SYNC_DAYS=7          # Days of hourly data to sync on regular sync
+REGULAR_SYNC_MONTHS=2        # Months of monthly data to sync on regular sync
+SYNC_INTERVAL_MINUTES=15     # Background sync interval
 ```
 
 ## API Endpoints
@@ -109,6 +122,37 @@ Returns a complete summary including:
 - This month's aggregate
 - Last month's aggregate
 - Comparisons (percentage changes)
+
+### Sync Endpoints
+
+```
+POST /sync
+```
+
+Trigger a manual sync. Optional query params:
+- `days`: Number of days to sync (default: 7, max: 365)
+- `months`: Number of months to sync (default: 2)
+
+```
+POST /sync/backfill/adaptive
+```
+
+Trigger a full adaptive backfill that fetches ALL available historical data.
+Stops when the API returns 3 consecutive days with no data.
+
+```
+GET /sync/status
+```
+
+Returns current sync status and backfill progress.
+
+### Contract Stats
+
+```
+GET /contracts/{contract_id}/stats
+```
+
+Returns database statistics including oldest/newest records and counts.
 
 ---
 
@@ -201,7 +245,93 @@ sudo journalctl -u contact-energy-api --since "1 hour ago"
 
 ---
 
-## Home Assistant Configuration
+## Home Assistant Integration Options
+
+There are two ways to integrate with Home Assistant:
+
+1. **Custom Component (Recommended)** - HACS-compatible native integration with automatic statistics import
+2. **REST Sensors** - Manual configuration using Home Assistant's built-in REST platform
+
+---
+
+## Option 1: HACS Custom Component (Recommended)
+
+The custom component provides the best experience with:
+- Native Home Assistant integration with UI-based setup
+- Automatic discovery of all your Contact Energy contracts
+- Historical data import into HA's long-term statistics
+- Energy Dashboard compatibility out of the box
+- Services for manual sync and backfill
+
+### Installation via HACS
+
+1. Ensure [HACS](https://hacs.xyz/) is installed in your Home Assistant
+2. Go to **HACS** > **Integrations**
+3. Click the three dots menu (top right) > **Custom repositories**
+4. Add this repository URL with category "Integration"
+5. Click **Install** on "Contact Energy"
+6. Restart Home Assistant
+
+### Manual Installation
+
+1. Copy the `custom_components/contact_energy` folder to your Home Assistant's `custom_components` directory
+2. Restart Home Assistant
+
+### Configuration
+
+1. Go to **Settings** > **Devices & Services**
+2. Click **Add Integration**
+3. Search for "Contact Energy"
+4. Enter your API server URL (e.g., `http://192.168.1.100:8000`)
+5. The integration will automatically discover all your contracts
+
+### Available Sensors
+
+The integration creates these sensors for each contract:
+
+**Electricity Contracts:**
+| Sensor | Description |
+|--------|-------------|
+| `sensor.contact_energy_XXXXX_today` | Today's usage in kWh |
+| `sensor.contact_energy_XXXXX_today_cost` | Today's cost in $ |
+| `sensor.contact_energy_XXXXX_yesterday` | Yesterday's usage in kWh |
+| `sensor.contact_energy_XXXXX_yesterday_cost` | Yesterday's cost in $ |
+| `sensor.contact_energy_XXXXX_this_month` | This month's total in kWh |
+| `sensor.contact_energy_XXXXX_this_month_cost` | This month's cost in $ |
+| `sensor.contact_energy_XXXXX_last_month` | Last month's total in kWh |
+| `sensor.contact_energy_XXXXX_last_month_cost` | Last month's cost in $ |
+| `sensor.contact_energy_XXXXX_vs_yesterday` | % change vs yesterday |
+| `sensor.contact_energy_XXXXX_vs_last_month` | % change vs last month |
+
+**Gas Contracts:**
+| Sensor | Description |
+|--------|-------------|
+| `sensor.contact_energy_XXXXX_gas_this_month` | This month's gas usage |
+| `sensor.contact_energy_XXXXX_gas_this_month_cost` | This month's gas cost |
+
+### Services
+
+The integration provides these services:
+
+- `contact_energy.sync` - Trigger a manual sync
+- `contact_energy.backfill` - Run adaptive backfill to fetch all historical data
+- `contact_energy.import_statistics` - Import historical data into HA statistics
+
+### Energy Dashboard
+
+The sensors are automatically configured with the correct `state_class` and `device_class` for the Energy Dashboard. After installation:
+
+1. Go to **Settings** > **Dashboards** > **Energy**
+2. Under "Electricity grid", click **Add consumption**
+3. Select `sensor.contact_energy_XXXXX_today`
+
+Historical data is automatically imported into long-term statistics, so your Energy Dashboard will show historical data immediately.
+
+---
+
+## Option 2: REST Sensors (Manual Configuration)
+
+If you prefer not to use the custom component, you can configure REST sensors manually.
 
 ### Step 1: Find Your Contract ID
 
@@ -538,11 +668,23 @@ uv run pytest --cov=app
 │   ├── routes/
 │   │   ├── accounts.py     # Account discovery endpoint
 │   │   ├── health.py       # Health check endpoint
+│   │   ├── sync.py         # Sync and backfill endpoints
 │   │   └── usage.py        # Usage data endpoints
 │   └── services/
 │       ├── cache.py        # TTL cache wrapper
 │       ├── contact_api.py  # Contact Energy API client
+│       ├── sync.py         # Sync and backfill logic
 │       └── usage_service.py # Business logic
+├── custom_components/
+│   └── contact_energy/     # Home Assistant custom component
+│       ├── __init__.py     # Integration setup
+│       ├── config_flow.py  # UI configuration flow
+│       ├── const.py        # Constants
+│       ├── coordinator.py  # Data update coordinator
+│       ├── manifest.json   # HACS manifest
+│       ├── sensor.py       # Sensor entities
+│       ├── services.yaml   # Service definitions
+│       └── strings.json    # Translations
 ├── homeassistant/
 │   ├── rest_sensor.yaml    # REST sensor configuration
 │   └── template_sensors.yaml # Template sensors configuration
@@ -552,6 +694,7 @@ uv run pytest --cov=app
 │   ├── test_routes.py
 │   └── test_services.py
 ├── contact-energy-api.service # systemd service file
+├── hacs.json               # HACS repository configuration
 ├── main.py                 # Entry point
 ├── pyproject.toml
 └── README.md

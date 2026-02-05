@@ -90,6 +90,11 @@ class UsageSummary(BaseModel):
         default=None,
         description="Date of the most recent data available (YYYY-MM-DD format)",
     )
+    # Timestamp when this response was generated (for HA to track freshness)
+    last_updated: datetime = Field(
+        default_factory=datetime.now,
+        description="Timestamp when this data was retrieved/generated",
+    )
 
 
 class Contract(BaseModel):

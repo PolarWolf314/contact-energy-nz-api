@@ -1,0 +1,38 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Contact Energy API",
+        "description": "Enter the URL of your Contact Energy API service. This should be the FastAPI service that fetches data from Contact Energy.",
+        "data": {
+          "api_url": "API URL"
+        },
+        "data_description": {
+          "api_url": "The URL of the Contact Energy API service (e.g., http://localhost:8000)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to the API. Please check the URL and ensure the service is running.",
+      "no_accounts": "No Contact Energy accounts found. Please check your API service configuration.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This Contact Energy account is already configured."
+    }
+  },
+  "services": {
+    "sync": {
+      "name": "Sync Data",
+      "description": "Trigger a manual sync to fetch the latest usage data from Contact Energy."
+    },
+    "backfill": {
+      "name": "Backfill Historical Data",
+      "description": "Fetch all available historical data from Contact Energy. This may take several minutes."
+    },
+    "import_statistics": {
+      "name": "Import Statistics",
+      "description": "Import historical data into Home Assistant's long-term statistics for charting and the Energy Dashboard."
+    }
+  }
+}

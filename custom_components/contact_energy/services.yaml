@@ -1,0 +1,11 @@
+sync:
+  name: Sync Data
+  description: Trigger a manual sync to fetch the latest usage data from Contact Energy.
+
+backfill:
+  name: Backfill Historical Data
+  description: Fetch all available historical data from Contact Energy. This may take several minutes.
+
+import_statistics:
+  name: Import Statistics
+  description: Import historical data into Home Assistant's long-term statistics for charting and the Energy Dashboard.

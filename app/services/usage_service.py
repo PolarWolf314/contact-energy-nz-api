@@ -1,9 +1,11 @@
 """Business logic for usage data and calculations."""
 
+import asyncio
 import logging
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from app.config import get_settings
 from app.db.repositories import UsageRepository, AccountRepository
 from app.models import (
     Account,
@@ -556,6 +558,190 @@ class UsageService:
     async def get_data_stats(self, contract_id: str) -> dict[str, Any]:
         """Get statistics about stored data for a contract."""
         return await self._usage_repo.get_data_stats(contract_id)
+
+    async def sync_contract_data_adaptive(
+        self,
+        contract_id: str,
+        include_months: int = 12,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Sync data for a contract, adaptively fetching all available historical data.
+        
+        This method keeps going back in time until the API returns no more data,
+        or until the configured maximum is reached.
+        
+        Args:
+            contract_id: The contract to sync
+            include_months: Number of months of daily data to fetch
+            force: If True, re-fetch all data even if it exists
+            
+        Returns:
+            Dictionary with sync statistics
+        """
+        from app.services.sync import update_backfill_progress
+        
+        settings = get_settings()
+        max_days = settings.backfill_max_days if settings.backfill_max_days > 0 else 730  # ~2 years max
+        empty_days_threshold = settings.backfill_empty_days_threshold
+        api_delay = settings.backfill_api_delay
+        
+        stats = {
+            "contract_id": contract_id,
+            "hourly_days_synced": 0,
+            "hourly_days_skipped": 0,
+            "hourly_days_empty": 0,
+            "months_synced": 0,
+            "months_skipped": 0,
+            "oldest_data_date": None,
+            "errors": [],
+        }
+
+        today = date.today()
+        consecutive_empty = 0
+
+        _LOGGER.info(
+            "Starting adaptive backfill for contract %s (max_days=%d, empty_threshold=%d)",
+            contract_id, max_days, empty_days_threshold
+        )
+
+        # Sync hourly data adaptively - keep going until we hit empty days
+        for days_ago in range(max_days):
+            target_date = today - timedelta(days=days_ago)
+            
+            # Update progress
+            update_backfill_progress(contract_id, {
+                "days_processed": days_ago,
+                "current_date": target_date.isoformat(),
+                "hourly_synced": stats["hourly_days_synced"],
+                "hourly_empty": stats["hourly_days_empty"],
+                "status": "in_progress",
+            })
+            
+            try:
+                # Check if we already have data for this date
+                if not force and await self._usage_repo.has_data_for_date(
+                    contract_id, target_date, "hourly"
+                ):
+                    stats["hourly_days_skipped"] += 1
+                    consecutive_empty = 0  # Reset since we have data
+                    continue
+                
+                # Clear cache and fetch from API
+                cache_key = f"hourly:{contract_id}:{target_date.isoformat()}"
+                self._cache.delete(cache_key)
+                
+                hours = await self._fetch_hourly_from_api(contract_id, target_date)
+                
+                if hours:
+                    stats["hourly_days_synced"] += 1
+                    stats["oldest_data_date"] = target_date.isoformat()
+                    consecutive_empty = 0
+                    _LOGGER.debug(
+                        "Contract %s: Synced %d hours for %s",
+                        contract_id, len(hours), target_date
+                    )
+                else:
+                    stats["hourly_days_empty"] += 1
+                    consecutive_empty += 1
+                    _LOGGER.debug(
+                        "Contract %s: No data for %s (consecutive empty: %d)",
+                        contract_id, target_date, consecutive_empty
+                    )
+                    
+                    # Stop if we've hit too many consecutive empty days
+                    if consecutive_empty >= empty_days_threshold:
+                        _LOGGER.info(
+                            "Contract %s: Stopping adaptive backfill after %d consecutive empty days at %s",
+                            contract_id, consecutive_empty, target_date
+                        )
+                        break
+                
+                # Rate limiting - wait between API calls
+                if api_delay > 0:
+                    await asyncio.sleep(api_delay)
+                    
+            except Exception as e:
+                stats["errors"].append(f"Hourly {target_date}: {str(e)}")
+                _LOGGER.warning("Error fetching hourly data for %s: %s", target_date, e)
+
+        # Sync monthly data (same as regular sync)
+        for months_ago in range(include_months):
+            if months_ago == 0:
+                month_date = today
+            else:
+                # Go back months
+                month_date = today.replace(day=1)
+                for _ in range(months_ago):
+                    month_date = month_date - timedelta(days=1)
+                    month_date = month_date.replace(day=1)
+            
+            month_str = month_date.strftime("%Y-%m")
+            try:
+                # Check if we already have data for this month
+                if not force and await self._usage_repo.has_data_for_month(
+                    contract_id, month_str
+                ):
+                    stats["months_skipped"] += 1
+                    continue
+                
+                # Clear cache and fetch from API
+                cache_key = f"monthly:{contract_id}:{month_str}:{month_str}"
+                self._cache.delete(cache_key)
+                
+                aggregate = await self._fetch_month_from_api(contract_id, month_str)
+                if aggregate:
+                    stats["months_synced"] += 1
+                    
+                # Rate limiting for monthly fetches too
+                if api_delay > 0:
+                    await asyncio.sleep(api_delay)
+                    
+            except Exception as e:
+                stats["errors"].append(f"Monthly {month_str}: {str(e)}")
+
+        # Update final progress
+        update_backfill_progress(contract_id, {
+            "days_processed": stats["hourly_days_synced"] + stats["hourly_days_skipped"] + stats["hourly_days_empty"],
+            "hourly_synced": stats["hourly_days_synced"],
+            "hourly_empty": stats["hourly_days_empty"],
+            "oldest_data_date": stats["oldest_data_date"],
+            "status": "completed",
+        })
+
+        _LOGGER.info(
+            "Contract %s adaptive backfill complete: %d days synced, %d empty, oldest data: %s",
+            contract_id,
+            stats["hourly_days_synced"],
+            stats["hourly_days_empty"],
+            stats["oldest_data_date"],
+        )
+
+        return stats
+
+    async def sync_all_contracts_adaptive(
+        self,
+        include_months: int = 12,
+        force: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Sync data for all contracts using adaptive backfill."""
+        from app.services.sync import clear_backfill_progress
+        
+        clear_backfill_progress()
+        results = []
+        
+        # Get all accounts/contracts
+        accounts = await self.get_accounts()
+        
+        for account in accounts:
+            for contract in account.contracts:
+                stats = await self.sync_contract_data_adaptive(
+                    contract.contract_id,
+                    include_months=include_months,
+                    force=force,
+                )
+                results.append(stats)
+        
+        return results
 
 
 # Global service instance

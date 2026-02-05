@@ -1,0 +1,12 @@
+{
+  "domain": "contact_energy",
+  "name": "Contact Energy",
+  "codeowners": ["@your-github-username"],
+  "config_flow": true,
+  "dependencies": ["recorder"],
+  "documentation": "https://github.com/your-repo/contact-energy-ha-integration",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/your-repo/contact-energy-ha-integration/issues",
+  "requirements": ["aiohttp>=3.8.0"],
+  "version": "1.0.0"
+}
