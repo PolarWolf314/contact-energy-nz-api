@@ -1,5 +1,6 @@
 """Sync control endpoints for manual sync and status checking."""
 
+from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, Query
@@ -111,7 +112,12 @@ async def trigger_backfill_all(
 
 
 @router.post("/backfill/adaptive")
-async def trigger_adaptive_backfill_all() -> dict[str, Any]:
+async def trigger_adaptive_backfill_all(
+    start_date: str | None = Query(
+        default=None,
+        description="Start date for backfill (YYYY-MM-DD). Defaults to 5 days ago since Contact Energy data is typically 3-4 days delayed.",
+    ),
+) -> dict[str, Any]:
     """Trigger an adaptive backfill that fetches ALL available historical data.
     
     This will keep fetching hourly data going back in time until the Contact Energy
@@ -130,7 +136,18 @@ async def trigger_adaptive_backfill_all() -> dict[str, Any]:
             "progress": get_backfill_progress(),
         }
     
-    results = await trigger_adaptive_backfill()
+    # Parse start_date if provided
+    parsed_start_date = None
+    if start_date:
+        try:
+            parsed_start_date = date.fromisoformat(start_date)
+        except ValueError:
+            return {
+                "status": "error",
+                "message": f"Invalid start_date format: {start_date}. Use YYYY-MM-DD.",
+            }
+    
+    results = await trigger_adaptive_backfill(start_date=parsed_start_date)
     
     return {
         "status": "completed",
@@ -143,6 +160,10 @@ async def trigger_adaptive_backfill_all() -> dict[str, Any]:
 async def trigger_adaptive_backfill_contract(
     contract_id: str,
     force: bool = Query(default=False, description="Force re-fetch even if data exists"),
+    start_date: str | None = Query(
+        default=None,
+        description="Start date for backfill (YYYY-MM-DD). Defaults to 5 days ago since Contact Energy data is typically 3-4 days delayed.",
+    ),
 ) -> dict[str, Any]:
     """Trigger an adaptive backfill for a specific contract.
     
@@ -155,11 +176,23 @@ async def trigger_adaptive_backfill_contract(
             "progress": get_backfill_progress(),
         }
     
+    # Parse start_date if provided
+    parsed_start_date = None
+    if start_date:
+        try:
+            parsed_start_date = date.fromisoformat(start_date)
+        except ValueError:
+            return {
+                "status": "error",
+                "message": f"Invalid start_date format: {start_date}. Use YYYY-MM-DD.",
+            }
+    
     service = get_usage_service()
     result = await service.sync_contract_data_adaptive(
         contract_id=contract_id,
         include_months=12,
         force=force,
+        start_date=parsed_start_date,
     )
     
     return {

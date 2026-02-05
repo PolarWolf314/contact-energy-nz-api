@@ -143,6 +143,9 @@ POST /sync/backfill/adaptive
 Trigger a full adaptive backfill that fetches ALL available historical data.
 Stops when the API returns 3 consecutive days with no data.
 
+Optional query params:
+- `start_date`: Starting date in YYYY-MM-DD format (default: 5 days ago, since Contact Energy data is typically 3-4 days delayed)
+
 ```
 GET /sync/status
 ```
@@ -349,15 +352,25 @@ The integration provides these services:
 - `contact_energy.backfill` - Run adaptive backfill to fetch all historical data
 - `contact_energy.import_statistics` - Import historical data into HA statistics
 
-### Energy Dashboard
+### Energy Dashboard Setup
 
-The sensors are automatically configured with the correct `state_class` and `device_class` for the Energy Dashboard. After installation:
+**Important:** For the Energy Dashboard, use the **external statistic** (not the sensor). The integration automatically imports historical hourly data as long-term statistics.
 
 1. Go to **Settings** > **Dashboards** > **Energy**
 2. Under "Electricity grid", click **Add consumption**
-3. Select `sensor.contact_energy_XXXXX_latest_day_energy`
+3. Look for `contact_energy:energy_XXXXX` in the list (**NOT** `sensor.contact_energy_XXXXX_latest_day_energy`)
+4. Select it and save
 
-Historical data is automatically imported into long-term statistics, so your Energy Dashboard will show historical data immediately.
+**Why use the statistic instead of the sensor?**
+
+| Entity | Purpose | Energy Dashboard |
+|--------|---------|------------------|
+| `contact_energy:energy_XXXXX` | External statistic with hourly historical data | **Use this one** |
+| `sensor.xxx_latest_day_energy` | Shows current day's total usage | For display only |
+
+The sensors are useful for dashboards and automations (e.g., "Today's usage: 15 kWh"), but the Energy Dashboard requires the external statistic which contains properly formatted hourly historical data.
+
+Historical data is automatically imported on first setup and when you call the `contact_energy.import_statistics` service.
 
 ---
 

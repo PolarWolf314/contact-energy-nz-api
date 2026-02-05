@@ -564,6 +564,7 @@ class UsageService:
         contract_id: str,
         include_months: int = 12,
         force: bool = False,
+        start_date: date | None = None,
     ) -> dict[str, Any]:
         """Sync data for a contract, adaptively fetching all available historical data.
         
@@ -574,6 +575,8 @@ class UsageService:
             contract_id: The contract to sync
             include_months: Number of months of daily data to fetch
             force: If True, re-fetch all data even if it exists
+            start_date: Starting date for backfill. Defaults to 5 days ago since
+                       Contact Energy data is typically 3-4 days delayed.
             
         Returns:
             Dictionary with sync statistics
@@ -596,17 +599,22 @@ class UsageService:
             "errors": [],
         }
 
+        # Default to 5 days ago if no start_date provided
+        # Contact Energy data is typically 3-4 days delayed
         today = date.today()
+        if start_date is None:
+            start_date = today - timedelta(days=5)
+        
         consecutive_empty = 0
 
         _LOGGER.info(
-            "Starting adaptive backfill for contract %s (max_days=%d, empty_threshold=%d)",
-            contract_id, max_days, empty_days_threshold
+            "Starting adaptive backfill for contract %s from %s (max_days=%d, empty_threshold=%d)",
+            contract_id, start_date.isoformat(), max_days, empty_days_threshold
         )
 
         # Sync hourly data adaptively - keep going until we hit empty days
         for days_ago in range(max_days):
-            target_date = today - timedelta(days=days_ago)
+            target_date = start_date - timedelta(days=days_ago)
             
             # Update progress
             update_backfill_progress(contract_id, {
@@ -722,8 +730,15 @@ class UsageService:
         self,
         include_months: int = 12,
         force: bool = False,
+        start_date: date | None = None,
     ) -> list[dict[str, Any]]:
-        """Sync data for all contracts using adaptive backfill."""
+        """Sync data for all contracts using adaptive backfill.
+        
+        Args:
+            include_months: Number of months of daily data to fetch
+            force: If True, re-fetch all data even if it exists
+            start_date: Starting date for backfill. Defaults to 5 days ago.
+        """
         from app.services.sync import clear_backfill_progress
         
         clear_backfill_progress()
@@ -738,6 +753,7 @@ class UsageService:
                     contract.contract_id,
                     include_months=include_months,
                     force=force,
+                    start_date=start_date,
                 )
                 results.append(stats)
         

@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from app.config import get_settings
@@ -78,6 +78,7 @@ async def _run_sync(
     force: bool = False,
     notify_ha: bool = True,
     adaptive: bool = False,
+    start_date: date | None = None,
 ) -> list[dict[str, Any]]:
     """Run a sync operation for all contracts.
     
@@ -87,6 +88,7 @@ async def _run_sync(
         force: Force re-fetch even if data exists
         notify_ha: Notify Home Assistant after sync
         adaptive: If True, keep going back until no more data is available
+        start_date: Starting date for adaptive backfill (defaults to 5 days ago)
     """
     global _sync_running
     
@@ -97,7 +99,8 @@ async def _run_sync(
     _sync_running = True
     try:
         if adaptive:
-            _LOGGER.info("Starting adaptive backfill sync: include_months=%d, force=%s", include_months, force)
+            _LOGGER.info("Starting adaptive backfill sync: include_months=%d, force=%s, start_date=%s", 
+                        include_months, force, start_date.isoformat() if start_date else "default")
         else:
             _LOGGER.info("Starting data sync: days_back=%d, months=%d, force=%s", days_back, include_months, force)
         
@@ -107,6 +110,7 @@ async def _run_sync(
             results = await service.sync_all_contracts_adaptive(
                 include_months=include_months,
                 force=force,
+                start_date=start_date,
             )
         else:
             results = await service.sync_all_contracts(
@@ -221,10 +225,15 @@ async def trigger_backfill(adaptive: bool = True) -> list[dict[str, Any]]:
         return await _run_sync(days_back=max_days, include_months=12)
 
 
-async def trigger_adaptive_backfill() -> list[dict[str, Any]]:
-    """Manually trigger an adaptive backfill that fetches all available data."""
-    _LOGGER.info("Adaptive backfill triggered - fetching all available historical data")
-    return await _run_sync(include_months=12, adaptive=True)
+async def trigger_adaptive_backfill(start_date: date | None = None) -> list[dict[str, Any]]:
+    """Manually trigger an adaptive backfill that fetches all available data.
+    
+    Args:
+        start_date: Starting date for backfill. Defaults to 5 days ago.
+    """
+    _LOGGER.info("Adaptive backfill triggered - fetching all available historical data from %s", 
+                 start_date.isoformat() if start_date else "5 days ago (default)")
+    return await _run_sync(include_months=12, adaptive=True, start_date=start_date)
 
 
 def is_sync_running() -> bool:
