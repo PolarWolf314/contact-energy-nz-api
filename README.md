@@ -354,7 +354,7 @@ The integration provides these services:
 
 ### Energy Dashboard Setup
 
-**Important:** For the Energy Dashboard, use the **external statistic** (not the sensor). The integration automatically imports historical data as long-term statistics.
+**Important:** For the Energy Dashboard, use the **external statistic** (not the sensor). The integration automatically imports historical data as long-term statistics, including both usage (kWh) and cost (NZD).
 
 #### Electricity (Hourly Data)
 
@@ -362,6 +362,7 @@ The integration provides these services:
 2. Under "Electricity grid", click **Add consumption**
 3. Look for `contact_energy:energy_XXXXX` in the list (**NOT** `sensor.contact_energy_XXXXX_latest_day_energy`)
 4. Select it and save
+5. **For cost tracking:** When prompted for "Use an entity tracking the total costs", select `contact_energy:cost_XXXXX`
 
 #### Gas (Monthly Data)
 
@@ -371,15 +372,27 @@ Gas contracts from Contact Energy provide monthly data only (not hourly like ele
 2. Under "Gas consumption", click **Add gas source**
 3. Look for `contact_energy:gas_XXXXX` in the list
 4. Select it and save
+5. **For cost tracking:** When prompted for "Use an entity tracking the total costs", select `contact_energy:gas_cost_XXXXX`
 
-**Note:** Gas data appears as monthly data points in the Energy Dashboard. Since Contact Energy reports gas usage in kWh (thermal equivalent), the statistics use kWh as the unit. Each data point represents the total gas usage for that month.
+**Note:** Gas data appears as monthly data points in the Energy Dashboard. The gas statistics use **daily average** values for the state (for meaningful month-over-month comparisons), while the cumulative sum tracks total usage. Since Contact Energy reports gas usage in kWh (thermal equivalent), the statistics use kWh as the unit.
+
+#### Available Statistics
+
+| Statistic ID | Purpose | Unit | State Value |
+|--------------|---------|------|-------------|
+| `contact_energy:energy_XXXXX` | Electricity usage (hourly) | kWh | Hourly usage |
+| `contact_energy:cost_XXXXX` | Electricity cost (hourly) | NZD | Hourly cost |
+| `contact_energy:gas_XXXXX` | Gas usage (monthly) | kWh | **Daily average** |
+| `contact_energy:gas_cost_XXXXX` | Gas cost (monthly) | NZD | **Daily average** |
 
 #### Why use the statistic instead of the sensor?
 
 | Entity | Purpose | Energy Dashboard |
 |--------|---------|------------------|
-| `contact_energy:energy_XXXXX` | External statistic with hourly electricity data | **Use this for electricity** |
-| `contact_energy:gas_XXXXX` | External statistic with monthly gas data | **Use this for gas** |
+| `contact_energy:energy_XXXXX` | External statistic with hourly electricity data | **Use for electricity consumption** |
+| `contact_energy:cost_XXXXX` | External statistic with hourly electricity cost | **Use for electricity cost tracking** |
+| `contact_energy:gas_XXXXX` | External statistic with monthly gas data | **Use for gas consumption** |
+| `contact_energy:gas_cost_XXXXX` | External statistic with monthly gas cost | **Use for gas cost tracking** |
 | `sensor.xxx_latest_day_energy` | Shows current day's total usage | For display only |
 | `sensor.xxx_gas_this_month` | Shows current month's gas usage | For display only |
 

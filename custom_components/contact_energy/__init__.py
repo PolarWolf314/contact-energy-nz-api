@@ -255,30 +255,44 @@ async def _async_insert_gas_statistics(
 ) -> None:
     """Insert monthly gas data as external statistics.
     
-    Creates statistics entries for gas usage. Each entry represents
-    the total usage for that month, timestamped at the 1st of the month.
+    Creates statistics entries for gas usage and cost. Each entry represents
+    the total usage/cost for that month, timestamped at the 1st of the month.
+    
+    The 'state' value uses daily_average for meaningful month-over-month
+    comparisons in the Energy Dashboard, while 'sum' tracks cumulative totals.
     """
     if not monthly_data:
         return
     
-    statistic_id = f"{DOMAIN}:gas_{contract_id}"
+    # Sort by month once for both statistics
+    sorted_data = sorted(monthly_data, key=lambda x: x.get("month", ""))
     
-    # Create metadata for the statistic
-    metadata = StatisticMetaData(
+    # === Gas Usage Statistics (kWh) ===
+    gas_statistic_id = f"{DOMAIN}:gas_{contract_id}"
+    gas_metadata = StatisticMetaData(
         has_mean=False,
         has_sum=True,
         name=f"Contact Energy Gas {contract_id}",
         source=DOMAIN,
-        statistic_id=statistic_id,
+        statistic_id=gas_statistic_id,
         unit_of_measurement="kWh",  # Gas is reported in kWh (thermal equivalent)
     )
     
-    # Build statistics entries
-    statistics: list[StatisticData] = []
-    cumulative_sum = 0.0
+    # === Gas Cost Statistics (NZD) ===
+    cost_statistic_id = f"{DOMAIN}:gas_cost_{contract_id}"
+    cost_metadata = StatisticMetaData(
+        has_mean=False,
+        has_sum=True,
+        name=f"Contact Energy Gas Cost {contract_id}",
+        source=DOMAIN,
+        statistic_id=cost_statistic_id,
+        unit_of_measurement="NZD",
+    )
     
-    # Sort by month
-    sorted_data = sorted(monthly_data, key=lambda x: x.get("month", ""))
+    gas_statistics: list[StatisticData] = []
+    cost_statistics: list[StatisticData] = []
+    gas_cumulative = 0.0
+    cost_cumulative = 0.0
     
     for record in sorted_data:
         month_str = record.get("month")
@@ -290,36 +304,65 @@ async def _async_insert_gas_statistics(
             year, month = map(int, month_str.split("-"))
             dt = datetime(year, month, 1, 0, 0, 0, tzinfo=timezone.utc)
             
-            value = record.get("value", 0) or 0
-            cumulative_sum += value
+            # Gas usage: use daily_average for state (for meaningful comparisons),
+            # but keep cumulative sum of totals for the 'sum' field
+            gas_total = record.get("value", 0) or 0
+            gas_daily_avg = record.get("daily_average", 0) or 0
+            gas_cumulative += gas_total
             
-            # Create statistic entry
-            stat = StatisticData(
+            gas_stat = StatisticData(
                 start=dt,
-                state=value,
-                sum=cumulative_sum,
+                state=gas_daily_avg,  # Daily average for month-over-month comparison
+                sum=gas_cumulative,   # Cumulative total for Energy Dashboard
             )
-            statistics.append(stat)
+            gas_statistics.append(gas_stat)
+            
+            # Gas cost: use daily average for state as well
+            cost_total = record.get("dollar_value", 0) or 0
+            days_with_data = record.get("days_with_data", 0) or 1
+            cost_daily_avg = cost_total / days_with_data if days_with_data > 0 else 0
+            cost_cumulative += cost_total
+            
+            cost_stat = StatisticData(
+                start=dt,
+                state=cost_daily_avg,  # Daily average cost
+                sum=cost_cumulative,   # Cumulative total cost
+            )
+            cost_statistics.append(cost_stat)
             
         except (ValueError, TypeError) as err:
             _LOGGER.warning("Error parsing month %s: %s", month_str, err)
             continue
     
-    if not statistics:
+    # Insert gas usage statistics
+    if gas_statistics:
+        try:
+            async_add_external_statistics(hass, gas_metadata, gas_statistics)
+            _LOGGER.info(
+                "Inserted %d gas statistics for %s (cumulative: %.2f kWh)",
+                len(gas_statistics),
+                gas_statistic_id,
+                gas_cumulative,
+            )
+        except Exception as err:
+            _LOGGER.error("Error inserting gas statistics: %s", err)
+    else:
         _LOGGER.warning("No valid gas statistics to insert for %s", contract_id)
-        return
     
-    # Insert the statistics
-    try:
-        async_add_external_statistics(hass, metadata, statistics)
-        _LOGGER.info(
-            "Inserted %d gas statistics for %s (cumulative: %.2f kWh)",
-            len(statistics),
-            statistic_id,
-            cumulative_sum,
-        )
-    except Exception as err:
-        _LOGGER.error("Error inserting gas statistics: %s", err)
+    # Insert gas cost statistics
+    if cost_statistics and cost_cumulative > 0:
+        try:
+            async_add_external_statistics(hass, cost_metadata, cost_statistics)
+            _LOGGER.info(
+                "Inserted %d gas cost statistics for %s (cumulative: $%.2f NZD)",
+                len(cost_statistics),
+                cost_statistic_id,
+                cost_cumulative,
+            )
+        except Exception as err:
+            _LOGGER.error("Error inserting gas cost statistics: %s", err)
+    else:
+        _LOGGER.debug("No gas cost data available for contract %s", contract_id)
 
 
 async def _async_insert_statistics(
@@ -331,28 +374,40 @@ async def _async_insert_statistics(
     
     This creates statistics entries that appear in Home Assistant's
     long-term statistics database, enabling historical charting.
+    Creates both energy (kWh) and cost (NZD) statistics.
     """
     if not historical_data:
         return
     
-    statistic_id = f"{DOMAIN}:energy_{contract_id}"
+    # Sort by date once for both statistics
+    sorted_data = sorted(historical_data, key=lambda x: x.get("date", ""))
     
-    # Create metadata for the statistic
-    metadata = StatisticMetaData(
+    # === Energy Statistics (kWh) ===
+    energy_statistic_id = f"{DOMAIN}:energy_{contract_id}"
+    energy_metadata = StatisticMetaData(
         has_mean=False,
         has_sum=True,
         name=f"Contact Energy {contract_id}",
         source=DOMAIN,
-        statistic_id=statistic_id,
+        statistic_id=energy_statistic_id,
         unit_of_measurement="kWh",
     )
     
-    # Group data by hour and calculate cumulative sum
-    statistics: list[StatisticData] = []
-    cumulative_sum = 0.0
+    # === Cost Statistics (NZD) ===
+    cost_statistic_id = f"{DOMAIN}:cost_{contract_id}"
+    cost_metadata = StatisticMetaData(
+        has_mean=False,
+        has_sum=True,
+        name=f"Contact Energy Cost {contract_id}",
+        source=DOMAIN,
+        statistic_id=cost_statistic_id,
+        unit_of_measurement="NZD",
+    )
     
-    # Sort by date
-    sorted_data = sorted(historical_data, key=lambda x: x.get("date", ""))
+    energy_statistics: list[StatisticData] = []
+    cost_statistics: list[StatisticData] = []
+    energy_cumulative = 0.0
+    cost_cumulative = 0.0
     
     for record in sorted_data:
         date_str = record.get("date")
@@ -367,33 +422,58 @@ async def _async_insert_statistics(
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             
-            value = record.get("value", 0) or 0
-            cumulative_sum += value
+            # Energy value
+            energy_value = record.get("value", 0) or 0
+            energy_cumulative += energy_value
             
-            # Create statistic entry
-            stat = StatisticData(
+            energy_stat = StatisticData(
                 start=dt,
-                state=value,
-                sum=cumulative_sum,
+                state=energy_value,
+                sum=energy_cumulative,
             )
-            statistics.append(stat)
+            energy_statistics.append(energy_stat)
+            
+            # Cost value (may be None for some records)
+            cost_value = record.get("dollar_value", 0) or 0
+            cost_cumulative += cost_value
+            
+            cost_stat = StatisticData(
+                start=dt,
+                state=cost_value,
+                sum=cost_cumulative,
+            )
+            cost_statistics.append(cost_stat)
             
         except (ValueError, TypeError) as err:
             _LOGGER.warning("Error parsing date %s: %s", date_str, err)
             continue
     
-    if not statistics:
-        _LOGGER.warning("No valid statistics to insert for %s", contract_id)
-        return
+    # Insert energy statistics
+    if energy_statistics:
+        try:
+            async_add_external_statistics(hass, energy_metadata, energy_statistics)
+            _LOGGER.info(
+                "Inserted %d energy statistics for %s (cumulative: %.2f kWh)",
+                len(energy_statistics),
+                energy_statistic_id,
+                energy_cumulative,
+            )
+        except Exception as err:
+            _LOGGER.error("Error inserting energy statistics: %s", err)
+    else:
+        _LOGGER.warning("No valid energy statistics to insert for %s", contract_id)
     
-    # Insert the statistics
-    try:
-        async_add_external_statistics(hass, metadata, statistics)
-        _LOGGER.info(
-            "Inserted %d statistics for %s (cumulative: %.2f kWh)",
-            len(statistics),
-            statistic_id,
-            cumulative_sum,
-        )
-    except Exception as err:
-        _LOGGER.error("Error inserting statistics: %s", err)
+    # Insert cost statistics
+    if cost_statistics and cost_cumulative > 0:
+        try:
+            async_add_external_statistics(hass, cost_metadata, cost_statistics)
+            _LOGGER.info(
+                "Inserted %d cost statistics for %s (cumulative: $%.2f NZD)",
+                len(cost_statistics),
+                cost_statistic_id,
+                cost_cumulative,
+            )
+        except Exception as err:
+            _LOGGER.error("Error inserting cost statistics: %s", err)
+    else:
+        _LOGGER.debug("No cost data available for contract %s", contract_id)
